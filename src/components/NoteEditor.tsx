@@ -1,33 +1,41 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import { Eye, Pencil, Wand2 } from "lucide-react";
 import "katex/dist/katex.min.css";
+import { NoteViewMode } from "../types";
 
 interface NoteEditorProps {
+  /** File name without extension — shown as the title in the header. */
+  title: string;
   /** Initial markdown content from disk. Re-supplied when the active file changes. */
   initialContent: string;
   /** Stable key (the file path) — re-mounts the editor when switched. */
   fileKey: string;
-  /** Saved to disk by the caller (debounce-handled here). */
+  /** Saved to disk by the caller (debounced inside). */
   onChange: (next: string) => void;
-  /** Width of the left (editor) pane in pixels. */
-  editorPaneWidth: number;
-  /** Persist the slider value to settings. */
-  onEditorPaneWidthChange: (next: number) => void;
+  /** Top-right toggle persists to settings. */
+  mode: NoteViewMode;
+  onModeChange: (mode: NoteViewMode) => void;
+  /** Trigger AI title-generation. Caller renames the file + refreshes tree. */
+  onGenerateTitle: (currentContent: string) => void;
+  /** Disable the title-AI button (no API key, or already running). */
+  titleBusy?: boolean;
 }
 
 export const NoteEditor: React.FC<NoteEditorProps> = ({
+  title,
   initialContent,
   fileKey,
   onChange,
-  editorPaneWidth,
-  onEditorPaneWidthChange,
+  mode,
+  onModeChange,
+  onGenerateTitle,
+  titleBusy,
 }) => {
   const [value, setValue] = useState(initialContent);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const draggingRef = useRef(false);
 
   // Hard reset when the active file changes.
   useEffect(() => {
@@ -35,8 +43,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileKey]);
 
-  // Debounced save on edits (250ms). The wrapper hands the saved value
-  // upward; the actual disk write happens in App.tsx.
+  // Debounced save on edits (250ms).
   useEffect(() => {
     if (value === initialContent) return;
     const t = setTimeout(() => onChange(value), 250);
@@ -44,70 +51,60 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
-  // Drag-to-resize the split. We translate the global mouseX into a
-  // local offset relative to the container, then clamp.
-  const startDrag = (e: React.MouseEvent) => {
-    e.preventDefault();
-    draggingRef.current = true;
-    document.body.style.cursor = "col-resize";
-  };
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (!draggingRef.current || !containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const local = e.clientX - rect.left;
-      const min = 240;
-      const max = Math.max(min + 200, rect.width - 280);
-      const clamped = Math.max(min, Math.min(max, local));
-      onEditorPaneWidthChange(clamped);
-    };
-    const onUp = () => {
-      if (draggingRef.current) {
-        draggingRef.current = false;
-        document.body.style.cursor = "";
-      }
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   return (
-    <div className="note-editor" ref={containerRef}>
-      <div className="note-pane note-pane--editor" style={{ width: editorPaneWidth }}>
-        <textarea
-          className="note-textarea mono"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          spellCheck={false}
-          placeholder="# Title
+    <div className="note-view">
+      <header className="note-header">
+        <div className="note-title" title={title}>{title}</div>
+        <div className="note-header-actions">
+          <button
+            type="button"
+            className="note-icon-btn"
+            onClick={() => onGenerateTitle(value)}
+            disabled={!!titleBusy}
+            title="Generate title from content"
+            aria-label="Generate title"
+          >
+            <Wand2 size={14} />
+          </button>
+          <button
+            type="button"
+            className={`note-mode-toggle${mode === "view" ? " active" : ""}`}
+            onClick={() => onModeChange(mode === "edit" ? "view" : "edit")}
+            title={mode === "edit" ? "Switch to preview" : "Switch to editor"}
+            aria-label="Toggle edit/view"
+          >
+            {mode === "edit" ? <Eye size={14} /> : <Pencil size={14} />}
+          </button>
+        </div>
+      </header>
+
+      <div className="note-body">
+        {mode === "edit" ? (
+          <textarea
+            className="note-textarea mono"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            spellCheck={false}
+            placeholder={
+`# Title
 
 Write Markdown here. Math works via $E = mc^2$ inline and
 $$
 \\int_0^\\infty e^{-x^2}\\,dx = \\tfrac{\\sqrt{\\pi}}{2}
 $$
-display blocks."
-        />
-      </div>
-      <div
-        className="note-divider"
-        onMouseDown={startDrag}
-        title="Drag to resize"
-      />
-      <div className="note-pane note-pane--preview">
-        <div className="note-preview">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex]}
-          >
-            {value || ""}
-          </ReactMarkdown>
-        </div>
+display blocks.`
+            }
+          />
+        ) : (
+          <div className="note-preview">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
+            >
+              {value || ""}
+            </ReactMarkdown>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -473,6 +473,40 @@ async fn extend_node(
 }
 
 #[tauri::command]
+async fn generate_title(api_key: String, content: String, model: String) -> Result<String, String> {
+    // Cap the content we ship to the model — titles only need the gist,
+    // and we'd rather not pay for 50k tokens of context.
+    let snippet: String = content.chars().take(4000).collect();
+    let prompt = format!(
+        "Read the markdown note below and propose a short title for it.\n\
+         Requirements:\n\
+         - 3 to 7 words, Title Case.\n\
+         - No quotes, no trailing punctuation, no leading `#`.\n\
+         - Output ONLY the title text on a single line.\n\
+         \n\
+         --- NOTE START ---\n{}\n--- NOTE END ---",
+        snippet
+    );
+    let (raw, usage) = call_openrouter(api_key, model, prompt).await?;
+    // Some models return code fences anyway — strip + trim.
+    let title = strip_markdown_fences(&raw)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_matches(|c: char| c == '"' || c == '\'' || c == '#' || c == '.')
+        .trim()
+        .to_string();
+    let resp = GenerationResponse {
+        data: title,
+        prompt_tokens: usage.prompt_tokens.unwrap_or(0),
+        completion_tokens: usage.completion_tokens.unwrap_or(0),
+        total_tokens: usage.total_tokens.unwrap_or(0),
+    };
+    serde_json::to_string(&resp).map_err(|e| format!("Failed to serialize result: {}", e))
+}
+
+#[tauri::command]
 async fn generate_note(api_key: String, topic: String, model: String) -> Result<String, String> {
     let prompt = format!(
         "Write a detailed, well-structured study note on the topic: \"{}\".\n\
@@ -510,6 +544,7 @@ pub fn run() {
             generate_mindmap,
             extend_node,
             generate_note,
+            generate_title,
             // Vault pointer
             get_vault_path,
             set_vault_path,

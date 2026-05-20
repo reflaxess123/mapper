@@ -54,10 +54,9 @@ const TreeRow: React.FC<TreeRowProps> = ({
   onOpen,
   onDelete,
 }) => {
-  // Dot-folders (.mindmapper) start collapsed so the user's actual notes
-  // dominate the tree view.
-  const startsCollapsed = entry.name.startsWith(".");
-  const [open, setOpen] = useState(!startsCollapsed);
+  // All folders start collapsed by default — opening a fresh vault
+  // shouldn't paint the whole tree at once.
+  const [open, setOpen] = useState(false);
   const isActive = activePath === entry.path && entry.kind !== "dir";
 
   const handleClick = () => {
@@ -68,13 +67,15 @@ const TreeRow: React.FC<TreeRowProps> = ({
     }
   };
 
+  // Monochrome icons — colour comes from .tree-row state, not the icon
+  // itself, so the sidebar stays calm.
   const icon = (() => {
     if (entry.kind === "dir") {
       return open ? <FolderOpen size={14} /> : <Folder size={14} />;
     }
-    if (entry.kind === "md") return <FileText size={14} className="ic-md" />;
-    if (entry.kind === "mindmap") return <Network size={14} className="ic-mindmap" />;
-    return <FileIcon size={14} className="ic-other" />;
+    if (entry.kind === "md") return <FileText size={14} />;
+    if (entry.kind === "mindmap") return <Network size={14} />;
+    return <FileIcon size={14} />;
   })();
 
   return (

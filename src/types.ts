@@ -21,14 +21,17 @@ export interface S3Settings {
   prefix?: string;        // optional path prefix inside the bucket
 }
 
+export type NoteViewMode = "edit" | "view";
+
 export interface AppSettings {
   apiKey: string;
   model: string;
   theme: Theme;
   s3: S3Settings;
-  // Width (px) of the markdown editor pane in the note view. The preview
-  // takes the remaining space.
-  editorPaneWidth: number;
+  /** Edit vs preview-only mode in the note view. */
+  noteMode: NoteViewMode;
+  /** Whole-UI zoom factor (1.0 = native). Applied via CSS `zoom`. */
+  uiScale: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -43,7 +46,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     bucket: "",
     prefix: "",
   },
-  editorPaneWidth: 520,
+  noteMode: "edit",
+  uiScale: 1.0,
 };
 
 // Token usage tracking. Stored in <vault>/.mindmapper/tokens.json:

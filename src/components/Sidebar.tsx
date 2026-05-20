@@ -4,10 +4,12 @@ import {
   Moon,
   Settings as SettingsIcon,
   Sparkles,
-  Brain,
   FolderOpen,
   FileText,
   Network,
+  Plus,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { AppSettings, TokenStats, VaultEntry } from "../types";
 import { FolderTree } from "./FolderTree";
@@ -23,15 +25,18 @@ interface SidebarProps {
   activePath: string | null;
   onOpenFile: (entry: VaultEntry) => void;
   onDeleteFile: (entry: VaultEntry) => void;
-  /** Topic + kind → new note or mindmap with that topic */
   onGenerate: (kind: NewKind, topic: string) => void;
+  /** Create a blank .md file with a placeholder title. */
+  onCreateBlankNote: () => void;
   isGenerating: boolean;
-  /** Total across all files */
   totalTokens: TokenStats;
-  /** Tokens for the currently open file, or null if none / never generated */
   fileTokens: TokenStats | null;
   onOpenSettings: () => void;
 }
+
+const SCALE_STEP = 0.1;
+const SCALE_MIN = 0.7;
+const SCALE_MAX = 1.6;
 
 export const Sidebar: React.FC<SidebarProps> = ({
   settings,
@@ -43,6 +48,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenFile,
   onDeleteFile,
   onGenerate,
+  onCreateBlankNote,
   isGenerating,
   totalTokens,
   fileTokens,
@@ -58,6 +64,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     });
   };
 
+  const bumpScale = (delta: number) => {
+    const next = Math.round((settings.uiScale + delta) * 100) / 100;
+    const clamped = Math.max(SCALE_MIN, Math.min(SCALE_MAX, next));
+    onSettingsChange({ ...settings, uiScale: clamped });
+  };
+
   const submitGenerate = (e: React.FormEvent) => {
     e.preventDefault();
     const t = topic.trim();
@@ -69,11 +81,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside className="sidebar">
       <div className="sidebar-content">
-        {/* Top: brand + theme switch */}
+        {/* Top row: scale +/-, theme switch */}
         <div className="sidebar-top-row">
-          <div className="sidebar-brand">
-            <Brain size={16} />
-            <span>MindMapper</span>
+          <div className="scale-cluster" role="group" aria-label="UI scale">
+            <button
+              className="scale-btn"
+              onClick={() => bumpScale(-SCALE_STEP)}
+              disabled={settings.uiScale <= SCALE_MIN + 0.001}
+              title="Smaller UI"
+              aria-label="Smaller UI"
+            >
+              <ZoomOut size={13} />
+            </button>
+            <span className="scale-readout">{Math.round(settings.uiScale * 100)}%</span>
+            <button
+              className="scale-btn"
+              onClick={() => bumpScale(SCALE_STEP)}
+              disabled={settings.uiScale >= SCALE_MAX - 0.001}
+              title="Bigger UI"
+              aria-label="Bigger UI"
+            >
+              <ZoomIn size={13} />
+            </button>
           </div>
           <button
             className="theme-icon-btn"
@@ -85,7 +114,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
 
-        {/* Vault chooser */}
+        {/* Vault picker chip */}
         <button
           className="vault-pick-btn"
           onClick={onPickVault}
@@ -97,9 +126,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </span>
         </button>
 
-        {/* Generate (note / mindmap) */}
+        {/* Generate + blank note */}
         {vaultPath && (
-          <form className="gen-form" onSubmit={submitGenerate}>
+          <div className="gen-block">
             <div className="gen-kind-toggle">
               <button
                 type="button"
@@ -118,7 +147,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <FileText size={12} /> Note
               </button>
             </div>
-            <div className="gen-input-row">
+            <form className="gen-input-row" onSubmit={submitGenerate}>
               <input
                 type="text"
                 value={topic}
@@ -131,12 +160,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 type="submit"
                 className="gen-submit-btn"
                 disabled={isGenerating || !topic.trim()}
-                title="Generate"
+                title="Generate via AI"
               >
                 <Sparkles size={13} />
               </button>
-            </div>
-          </form>
+              <button
+                type="button"
+                className="gen-submit-btn alt"
+                onClick={onCreateBlankNote}
+                title="Create a blank note (no AI)"
+                aria-label="New blank note"
+              >
+                <Plus size={14} />
+              </button>
+            </form>
+          </div>
         )}
 
         {/* Tree */}
@@ -144,7 +182,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {!vaultPath ? (
             <p className="no-vault">Pick a folder above — it becomes your MindMapper vault.</p>
           ) : entries.length === 0 ? (
-            <p className="no-vault">Empty vault. Generate a mind map or a note above to get started.</p>
+            <p className="no-vault">Empty vault. Generate or create something above to get started.</p>
           ) : (
             <FolderTree
               entries={entries}
@@ -155,14 +193,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* Token usage — only when something the AI made is open, plus total */}
+        {/* Token usage — only when AI activity is relevant to the current view */}
         {(fileTokens || totalTokens.total > 0) && (
           <div className="token-usage-section">
             {fileTokens && (
               <div className="token-stats">
-                <div className="token-stat-row label">
-                  <span>This file</span>
-                </div>
+                <div className="token-stat-row label"><span>This file</span></div>
                 <div className="token-stat-row">
                   <span>Prompt</span>
                   <span className="token-count">{fileTokens.prompt.toLocaleString()}</span>
@@ -179,9 +215,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
             {totalTokens.total > 0 && (
               <div className="token-stats">
-                <div className="token-stat-row label">
-                  <span>All-time</span>
-                </div>
+                <div className="token-stat-row label"><span>All-time</span></div>
                 <div className="token-stat-row">
                   <span>Prompt</span>
                   <span className="token-count">{totalTokens.prompt.toLocaleString()}</span>

@@ -98,6 +98,11 @@ function App() {
     }
   }, [settings.theme]);
 
+  // ── UI scale (Chromium `zoom` on body so layout reflows) ──────────────
+  useEffect(() => {
+    (document.body.style as any).zoom = String(settings.uiScale);
+  }, [settings.uiScale]);
+
   // ── Settings I/O ──────────────────────────────────────────────────────
   // We debounce-persist to disk on every change so the user never has to
   // hit "save."
@@ -491,6 +496,105 @@ function App() {
     }
   }, [openDoc, vaultPath]);
 
+  // ── Blank-note creation (no AI) ───────────────────────────────────────
+  const handleCreateBlankNote = useCallback(async () => {
+    if (!vaultPath) return;
+    try {
+      const name = await uniqueName("Untitled", "md");
+      await tauriWriteFile(vaultPath, name, "# Untitled\n\n");
+      setOpenDoc({ kind: "md", relPath: name, content: "# Untitled\n\n" });
+      await refreshTree(vaultPath);
+    } catch (e: any) {
+      setError(`Could not create note: ${e?.message || e}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vaultPath, entries, refreshTree]);
+
+  // ── Title generation: AI returns a short title; we rename the file ────
+  const [titleBusy, setTitleBusy] = useState(false);
+  const handleGenerateTitle = useCallback(async (currentContent: string) => {
+    if (!openDoc || openDoc.kind !== "md" || !vaultPath) return;
+    if (!settings.apiKey.trim()) {
+      setError("Set your OpenRouter API key in Settings first.");
+      return;
+    }
+    if (!currentContent.trim()) {
+      setError("Note is empty — nothing to title.");
+      return;
+    }
+    setTitleBusy(true);
+    setError(null);
+    try {
+      const responseStr = await invoke<string>("generate_title", {
+        apiKey: settings.apiKey.trim(),
+        content: currentContent,
+        model: settings.model,
+      });
+      const r: GenResponse = JSON.parse(responseStr);
+      const rawTitle = r.data.trim();
+      const safe = sanitizeFileName(rawTitle);
+      if (!safe || safe === "untitled") {
+        setError("AI returned an unusable title.");
+        return;
+      }
+
+      // Resolve target filename in the same folder as the current note
+      const slash = openDoc.relPath.lastIndexOf("/");
+      const dirPart = slash >= 0 ? openDoc.relPath.slice(0, slash + 1) : "";
+      let candidate = `${dirPart}${safe}.md`;
+      let n = 2;
+      while (candidate !== openDoc.relPath && existsInTree(candidate)) {
+        candidate = `${dirPart}${safe} ${n}.md`;
+        n++;
+      }
+      if (candidate === openDoc.relPath) {
+        // Title already matches — nothing to do
+      } else {
+        await invoke("rename_vault_file", {
+          vault: vaultPath,
+          from: openDoc.relPath,
+          to: candidate,
+        });
+        // Move per-file tokens to the new path
+        if (ledger.byFile[openDoc.relPath]) {
+          ledgerDirtyRef.current = true;
+          setLedger((prev) => {
+            const { [openDoc.relPath]: stat, ...rest } = prev.byFile;
+            return { ...prev, byFile: { ...rest, [candidate]: stat } };
+          });
+        }
+        setOpenDoc({ ...openDoc, relPath: candidate });
+        await refreshTree(vaultPath);
+      }
+
+      // Account tokens against the (possibly new) path
+      addTokens(candidate, {
+        prompt: r.prompt_tokens,
+        completion: r.completion_tokens,
+        total: r.total_tokens,
+      });
+    } catch (err: any) {
+      surfaceError(String(err?.message || err || ""), "Title generation failed");
+    } finally {
+      setTitleBusy(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openDoc, vaultPath, settings.apiKey, settings.model, ledger.byFile, refreshTree]);
+
+  // Walk the tree to check if a path is already taken
+  const existsInTree = (relPath: string): boolean => {
+    const walk = (arr: VaultEntry[]): boolean =>
+      arr.some((e) => e.path === relPath || (e.children && walk(e.children)));
+    return walk(entries);
+  };
+
+  // Derive a display title for the current note: basename without ext.
+  const noteTitle = (() => {
+    if (!openDoc || openDoc.kind !== "md") return "";
+    const base = openDoc.relPath.split("/").slice(-1)[0];
+    return base.replace(/\.[^.]+$/, "");
+  })();
+
   // ── Derived: per-file tokens for current open doc, if AI-generated ────
   const fileTokens: TokenStats | null = useMemo(() => {
     if (!openDoc) return null;
@@ -512,6 +616,7 @@ function App() {
         onOpenFile={handleOpenFile}
         onDeleteFile={handleDeleteFile}
         onGenerate={handleGenerate}
+        onCreateBlankNote={handleCreateBlankNote}
         isGenerating={isLoading}
         totalTokens={ledger.all}
         fileTokens={fileTokens}
@@ -583,13 +688,14 @@ function App() {
             />
           ) : (
             <NoteEditor
+              title={noteTitle}
               initialContent={openDoc.content}
               fileKey={openDoc.relPath}
               onChange={handleNoteChange}
-              editorPaneWidth={settings.editorPaneWidth}
-              onEditorPaneWidthChange={(w) =>
-                updateSettings({ ...settings, editorPaneWidth: w })
-              }
+              mode={settings.noteMode}
+              onModeChange={(m) => updateSettings({ ...settings, noteMode: m })}
+              onGenerateTitle={handleGenerateTitle}
+              titleBusy={titleBusy}
             />
           )}
         </div>
