@@ -714,6 +714,9 @@ html, body {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   box-sizing: border-box;
+  /* Animate width changes when the user clicks a different level dot.
+     Keep the easing snappy (~280ms) so it feels responsive, not lazy. */
+  transition: max-width 0.28s var(--ease-out);
 }
 
 /* ── Title card ── */

@@ -26,9 +26,10 @@ interface NoteEditorProps {
 }
 
 // Discrete width steps. The active one lights up; clicking another
-// snaps the column to that level. Width is still stored as a px number
-// in settings so future steps can be inserted without a migration.
-const WIDTH_LEVELS: number[] = [600, 760, 900, 1100];
+// snaps the column to that level (animated via CSS transition on the
+// card's max-width). Width is still stored as a px number in settings
+// so future steps can be inserted without a migration.
+const WIDTH_LEVELS: number[] = [760, 900, 1100];
 
 export const NoteEditor: React.FC<NoteEditorProps> = ({
   title,
