@@ -168,10 +168,12 @@ function App() {
 
     // Load token ledger
     const tk = await readOpt(path, TOKENS_FILE);
-    let nextLedger: TokenLedger = { all: { ...EMPTY_TOKENS }, byFile: {} };
+    let nextLedger: TokenLedger = { byFile: {} };
     if (tk) {
       try {
-        nextLedger = JSON.parse(tk) as TokenLedger;
+        const parsed = JSON.parse(tk);
+        // Backwards-compat: older files had `all` too — we ignore it now.
+        nextLedger = { byFile: parsed.byFile ?? {} };
       } catch (e) {
         console.error("tokens.json parse:", e);
       }
@@ -203,11 +205,6 @@ function App() {
     setLedger((prev) => {
       const fileBefore = prev.byFile[relPath] ?? EMPTY_TOKENS;
       return {
-        all: {
-          prompt: prev.all.prompt + delta.prompt,
-          completion: prev.all.completion + delta.completion,
-          total: prev.all.total + delta.total,
-        },
         byFile: {
           ...prev.byFile,
           [relPath]: {
@@ -618,8 +615,6 @@ function App() {
         onGenerate={handleGenerate}
         onCreateBlankNote={handleCreateBlankNote}
         isGenerating={isLoading}
-        totalTokens={ledger.all}
-        fileTokens={fileTokens}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
@@ -685,6 +680,7 @@ function App() {
               onAddChild={handleAddChildNode}
               onAiExpand={handleAiExpandNode}
               generatingNodeId={generatingNodeId}
+              fileTokens={fileTokens}
             />
           ) : (
             <NoteEditor
@@ -699,6 +695,7 @@ function App() {
               titleBusy={titleBusy}
               width={settings.noteWidth}
               onWidthChange={(w) => updateSettings({ ...settings, noteWidth: w })}
+              fileTokens={fileTokens}
             />
           )}
         </div>

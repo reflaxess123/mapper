@@ -11,7 +11,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { AppSettings, TokenStats, VaultEntry } from "../types";
+import { AppSettings, VaultEntry } from "../types";
 import { FolderTree } from "./FolderTree";
 
 type NewKind = "note" | "mindmap";
@@ -29,8 +29,6 @@ interface SidebarProps {
   /** Create a blank .md file with a placeholder title. */
   onCreateBlankNote: () => void;
   isGenerating: boolean;
-  totalTokens: TokenStats;
-  fileTokens: TokenStats | null;
   onOpenSettings: () => void;
 }
 
@@ -50,8 +48,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onGenerate,
   onCreateBlankNote,
   isGenerating,
-  totalTokens,
-  fileTokens,
   onOpenSettings,
 }) => {
   const [topic, setTopic] = useState("");
@@ -192,46 +188,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
           )}
         </div>
-
-        {/* Token usage — only when AI activity is relevant to the current view */}
-        {(fileTokens || totalTokens.total > 0) && (
-          <div className="token-usage-section">
-            {fileTokens && (
-              <div className="token-stats">
-                <div className="token-stat-row label"><span>This file</span></div>
-                <div className="token-stat-row">
-                  <span>Prompt</span>
-                  <span className="token-count">{fileTokens.prompt.toLocaleString()}</span>
-                </div>
-                <div className="token-stat-row">
-                  <span>Completion</span>
-                  <span className="token-count">{fileTokens.completion.toLocaleString()}</span>
-                </div>
-                <div className="token-stat-row total">
-                  <span>Total</span>
-                  <span className="token-count">{fileTokens.total.toLocaleString()}</span>
-                </div>
-              </div>
-            )}
-            {totalTokens.total > 0 && (
-              <div className="token-stats">
-                <div className="token-stat-row label"><span>All-time</span></div>
-                <div className="token-stat-row">
-                  <span>Prompt</span>
-                  <span className="token-count">{totalTokens.prompt.toLocaleString()}</span>
-                </div>
-                <div className="token-stat-row">
-                  <span>Completion</span>
-                  <span className="token-count">{totalTokens.completion.toLocaleString()}</span>
-                </div>
-                <div className="token-stat-row total">
-                  <span>Total</span>
-                  <span className="token-count">{totalTokens.total.toLocaleString()}</span>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Bottom: settings modal trigger */}
         <button className="sidebar-settings-btn" onClick={onOpenSettings}>

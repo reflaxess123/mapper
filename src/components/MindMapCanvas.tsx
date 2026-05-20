@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import * as d3 from "d3-hierarchy";
-import { MindMapNodeData } from "../types";
+import { MindMapNodeData, TokenStats } from "../types";
 import { MindMapNode } from "./MindMapNode";
 // no toolbar — pan via middle-mouse, zoom via wheel
 
@@ -12,6 +12,8 @@ interface MindMapCanvasProps {
   onAddChild: (id: string) => void;
   onAiExpand: (id: string) => void;
   generatingNodeId: string | null;
+  /** Per-file token spend; null if this map never used the AI. */
+  fileTokens?: TokenStats | null;
 }
 
 export const MindMapCanvas: React.FC<MindMapCanvasProps> = ({
@@ -22,6 +24,7 @@ export const MindMapCanvas: React.FC<MindMapCanvasProps> = ({
   onAddChild,
   onAiExpand,
   generatingNodeId,
+  fileTokens,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -280,6 +283,25 @@ export const MindMapCanvas: React.FC<MindMapCanvasProps> = ({
           ))}
         </div>
       </div>
+
+      {/* Tiny floating token readout — visible only when this map has
+          consumed AI calls. Bottom-right, doesn't compete with content. */}
+      {fileTokens && fileTokens.total > 0 && (
+        <div className="canvas-tokens" title="Tokens spent on this mind map">
+          <span className="ct-pair">
+            <span className="ct-key">in</span>
+            <span className="ct-val">{fileTokens.prompt.toLocaleString()}</span>
+          </span>
+          <span className="ct-pair">
+            <span className="ct-key">out</span>
+            <span className="ct-val">{fileTokens.completion.toLocaleString()}</span>
+          </span>
+          <span className="ct-pair total">
+            <span className="ct-key">Σ</span>
+            <span className="ct-val">{fileTokens.total.toLocaleString()}</span>
+          </span>
+        </div>
+      )}
     </div>
   );
 };

@@ -5,7 +5,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { Eye, Pencil, Wand2, MapPin } from "lucide-react";
 import "katex/dist/katex.min.css";
-import { NoteViewMode } from "../types";
+import { NoteViewMode, TokenStats } from "../types";
 
 interface NoteEditorProps {
   title: string;
@@ -21,6 +21,8 @@ interface NoteEditorProps {
   /** Width (px) of the card column. Persisted in app settings. */
   width: number;
   onWidthChange: (next: number) => void;
+  /** Per-file token spend (null if this note never used the AI). */
+  fileTokens?: TokenStats | null;
 }
 
 const MIN_W = 560;
@@ -38,6 +40,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   titleBusy,
   width,
   onWidthChange,
+  fileTokens,
 }) => {
   const [value, setValue] = useState(initialContent);
 
@@ -147,6 +150,11 @@ display blocks.`
             <span><strong>{stats.words.toLocaleString()}</strong> words</span>
             <span><strong>{stats.chars.toLocaleString()}</strong> chars</span>
             <span><strong>{stats.lines.toLocaleString()}</strong> lines</span>
+            {fileTokens && fileTokens.total > 0 && (
+              <span className="footer-tokens" title="Tokens spent on this note">
+                <strong>{fileTokens.total.toLocaleString()}</strong> tokens
+              </span>
+            )}
           </div>
         </footer>
       </div>

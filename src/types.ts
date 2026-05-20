@@ -64,13 +64,12 @@ export interface TokenStats {
 }
 
 export interface TokenLedger {
-  all: TokenStats;
   byFile: Record<string, TokenStats>;
 }
 
 export const EMPTY_TOKENS: TokenStats = { prompt: 0, completion: 0, total: 0 };
 
-export const EMPTY_LEDGER: TokenLedger = { all: { ...EMPTY_TOKENS }, byFile: {} };
+export const EMPTY_LEDGER: TokenLedger = { byFile: {} };
 
 // Recursive folder tree returned from the backend.
 export interface VaultEntry {
