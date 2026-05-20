@@ -54,34 +54,39 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   return (
     <div className="note-view">
       <header className="note-header">
-        <div className="note-title" title={title}>{title}</div>
-        <div className="note-header-actions">
-          <button
-            type="button"
-            className="note-icon-btn"
-            onClick={() => onGenerateTitle(value)}
-            disabled={!!titleBusy}
-            title="Generate title from content"
-            aria-label="Generate title"
-          >
-            <Wand2 size={14} />
-          </button>
-          <button
-            type="button"
-            className={`note-mode-toggle${mode === "view" ? " active" : ""}`}
-            onClick={() => onModeChange(mode === "edit" ? "view" : "edit")}
-            title={mode === "edit" ? "Switch to preview" : "Switch to editor"}
-            aria-label="Toggle edit/view"
-          >
-            {mode === "edit" ? <Eye size={14} /> : <Pencil size={14} />}
-          </button>
+        <div className="note-header-inner">
+          <div className="note-title-block">
+            <span className="note-title-eyebrow">Note</span>
+            <h1 className="note-title" title={title}>{title}</h1>
+          </div>
+          <div className="note-header-actions">
+            <button
+              type="button"
+              className="note-icon-btn"
+              onClick={() => onGenerateTitle(value)}
+              disabled={!!titleBusy}
+              title="Generate title from content"
+              aria-label="Generate title"
+            >
+              <Wand2 size={15} />
+            </button>
+            <button
+              type="button"
+              className={`note-mode-toggle${mode === "view" ? " active" : ""}`}
+              onClick={() => onModeChange(mode === "edit" ? "view" : "edit")}
+              title={mode === "edit" ? "Switch to preview" : "Switch to editor"}
+              aria-label="Toggle edit/view"
+            >
+              {mode === "edit" ? <Eye size={15} /> : <Pencil size={15} />}
+            </button>
+          </div>
         </div>
       </header>
 
       <div className="note-body">
         {mode === "edit" ? (
           <textarea
-            className="note-textarea mono"
+            className="note-textarea mono note-pane"
             value={value}
             onChange={(e) => setValue(e.target.value)}
             spellCheck={false}
@@ -96,7 +101,7 @@ display blocks.`
             }
           />
         ) : (
-          <div className="note-preview">
+          <div className="note-preview note-pane">
             <ReactMarkdown
               remarkPlugins={[remarkGfm, remarkMath]}
               rehypePlugins={[rehypeKatex]}

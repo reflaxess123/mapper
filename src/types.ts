@@ -46,7 +46,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     bucket: "",
     prefix: "",
   },
-  noteMode: "edit",
+  noteMode: "view",
   uiScale: 1.0,
 };
 

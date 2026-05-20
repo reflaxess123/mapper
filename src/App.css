@@ -688,7 +688,10 @@ html, body {
   min-width: 0;
 }
 
-/* ===== Note view (single pane, toggle edit/preview) ===== */
+/* ===== Note view (single pane, toggle edit/preview) =====
+   Header + body share the same centred column so the title visually
+   anchors the content underneath. Both modes use the same `.note-pane`
+   width so flipping Edit ↔ View doesn't reflow. */
 .note-view {
   flex: 1 1 auto;
   display: flex;
@@ -696,34 +699,58 @@ html, body {
   min-height: 0;
   background: var(--bg);
 }
+
+/* Header has full-bleed background but the inner content is constrained
+   to the same column the body uses. */
 .note-header {
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  padding: 18px 36px 16px;
+}
+.note-header-inner {
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
   display: flex;
   align-items: center;
-  gap: var(--space-12);
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elevated);
-  flex-shrink: 0;
+  gap: var(--space-16);
 }
-.note-title {
+
+.note-title-block {
   flex: 1 1 auto;
   min-width: 0;
-  font: 700 var(--text-base) / 1 inherit;
-  letter-spacing: -0.2px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.note-title-eyebrow {
+  font: 700 10px / 1 inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
+.note-title {
+  font: 800 24px / 1.15 inherit;
+  letter-spacing: -0.5px;
   color: var(--fg);
+  margin: 0;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
+
 .note-header-actions {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
+
 .note-icon-btn,
 .note-mode-toggle {
   appearance: none;
-  width: 30px; height: 30px;
+  width: 32px; height: 32px;
   background: var(--surface);
   border: none;
   color: var(--muted);
@@ -734,42 +761,52 @@ html, body {
 }
 .note-icon-btn:hover:not(:disabled),
 .note-mode-toggle:hover { background: var(--hover); color: var(--fg); }
-.note-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.note-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .note-mode-toggle.active {
   background: var(--accent);
   color: var(--accent-fg);
 }
-.note-mode-toggle.active:hover { background: var(--accent); color: var(--accent-fg); filter: brightness(1.05); }
+.note-mode-toggle.active:hover {
+  background: var(--accent); color: var(--accent-fg);
+  filter: brightness(1.05);
+}
 
+/* Scroll container — single layer so it's the same in both modes. */
 .note-body {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
   display: flex;
-  overflow: auto;
+  justify-content: center;
 }
-.note-textarea {
+
+/* Shared content column. Identical max-width and padding for edit and
+   view, so the eye never sees the text shift horizontally when the user
+   flips modes. */
+.note-pane {
   flex: 1 1 auto;
   width: 100%;
+  max-width: 920px;
+  padding: 32px 36px 80px;
+  box-sizing: border-box;
+}
+
+.note-textarea {
   background: transparent;
   border: none;
   outline: none;
   color: var(--fg);
   resize: none;
-  padding: 22px 28px;
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.7;
+  min-height: 100%;
 }
 .note-textarea.mono {
   font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", SFMono-Regular, Menlo, monospace;
 }
 
 .note-preview {
-  flex: 1 1 auto;
-  padding: 28px 36px;
-  max-width: 920px;
-  width: 100%;
-  margin: 0 auto;
-  line-height: 1.65;
+  line-height: 1.7;
   font-size: var(--text-base);
   color: var(--fg);
 }
