@@ -666,6 +666,38 @@ html, body {
   min-height: 0;
   overflow-y: auto;
   background: var(--bg);
+  scrollbar-gutter: stable;
+  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
+}
+
+/* Dedicated scrollbar for the note column — gentle in both themes,
+   slightly more visible than the global 6px one because this is the
+   primary scroll surface. */
+.note-view::-webkit-scrollbar { width: 12px; }
+.note-view::-webkit-scrollbar-track { background: transparent; }
+.note-view::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted) 25%, transparent);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 99px;
+  transition: background-color 0.18s var(--ease-out);
+}
+.note-view:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+.note-view::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted);
+}
+.note-view::-webkit-scrollbar-thumb:active {
+  background-color: var(--fg);
+}
+/* Dark theme nudges the thumb a touch brighter so it reads on
+   `--bg: #0e0e11`. */
+.dark .note-view::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted) 40%, transparent);
+}
+.dark .note-view:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted) 70%, transparent);
 }
 .note-stack {
   display: flex;
@@ -798,6 +830,21 @@ html, body {
   font-size: 14px;
   line-height: 1.7;
   min-height: 280px;
+  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
+}
+.note-textarea::-webkit-scrollbar { width: 10px; }
+.note-textarea::-webkit-scrollbar-track { background: transparent; }
+.note-textarea::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted) 30%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 99px;
+}
+.note-textarea::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted);
+}
+.dark .note-textarea::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted) 45%, transparent);
 }
 .note-textarea.mono {
   font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", SFMono-Regular, Menlo, monospace;
