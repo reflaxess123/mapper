@@ -116,6 +116,7 @@ html, body {
 .main-column {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -686,37 +687,44 @@ html, body {
   flex-direction: column;
   background: var(--bg);
   min-width: 0;
+  min-height: 0;
 }
 
-/* ===== Note view (single pane, toggle edit/preview) =====
-   Header + body share the same centred column so the title visually
-   anchors the content underneath. Both modes use the same `.note-pane`
-   width so flipping Edit ↔ View doesn't reflow. */
+/* ===== Note view ===========================================
+   Stack of three rounded cards (title / content / footer), all
+   constrained to the same `.note-card` max-width — the slider in the
+   title-card adjusts the shared width var via inline `style`. The whole
+   stack scrolls inside `.note-view`. */
 .note-view {
   flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
   background: var(--bg);
 }
-
-/* Header has full-bleed background but the inner content is constrained
-   to the same column the body uses. */
-.note-header {
-  flex-shrink: 0;
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border);
-  padding: 18px 36px 16px;
+.note-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-20) var(--space-20) var(--space-24);
 }
-.note-header-inner {
+
+.note-card {
   width: 100%;
-  max-width: 920px;
-  margin: 0 auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  box-sizing: border-box;
+}
+
+/* ── Title card ── */
+.note-title-card {
   display: flex;
   align-items: center;
   gap: var(--space-16);
+  padding: 18px 22px;
 }
-
 .note-title-block {
   flex: 1 1 auto;
   min-width: 0;
@@ -747,6 +755,56 @@ html, body {
   flex-shrink: 0;
 }
 
+/* Width slider — sits between title and the buttons */
+.note-width-knob {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  height: 32px;
+}
+.note-width-knob input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 92px;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+  margin: 0;
+}
+.note-width-knob input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 99px;
+  background: var(--border-strong);
+}
+.note-width-knob input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-top: -5.5px;
+  border: none;
+  cursor: grab;
+  transition: transform 0.15s var(--ease-out);
+}
+.note-width-knob input[type="range"]:hover::-webkit-slider-thumb {
+  transform: scale(1.1);
+}
+.note-width-knob input[type="range"]::-moz-range-track {
+  height: 3px;
+  border-radius: 99px;
+  background: var(--border-strong);
+}
+.note-width-knob input[type="range"]::-moz-range-thumb {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: grab;
+}
+
 .note-icon-btn,
 .note-mode-toggle {
   appearance: none;
@@ -771,44 +829,70 @@ html, body {
   filter: brightness(1.05);
 }
 
-/* Scroll container — single layer so it's the same in both modes. */
-.note-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
+/* ── Content card ── */
+.note-content-card {
+  padding: 24px 28px 28px;
   display: flex;
-  justify-content: center;
 }
-
-/* Shared content column. Identical max-width and padding for edit and
-   view, so the eye never sees the text shift horizontally when the user
-   flips modes. */
-.note-pane {
-  flex: 1 1 auto;
-  width: 100%;
-  max-width: 920px;
-  padding: 32px 36px 80px;
-  box-sizing: border-box;
-}
-
 .note-textarea {
+  width: 100%;
   background: transparent;
   border: none;
   outline: none;
   color: var(--fg);
-  resize: none;
+  resize: vertical;
   font-size: 14px;
   line-height: 1.7;
-  min-height: 100%;
+  min-height: 280px;
 }
 .note-textarea.mono {
   font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", SFMono-Regular, Menlo, monospace;
 }
-
 .note-preview {
+  width: 100%;
   line-height: 1.7;
   font-size: var(--text-base);
   color: var(--fg);
+}
+
+/* ── Footer card: location + content stats ── */
+.note-footer-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-12);
+  padding: 12px 18px;
+}
+.note-footer-loc {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font: 500 var(--text-xs) / 1 inherit;
+  flex: 1 1 auto;
+}
+.note-footer-loc svg { flex-shrink: 0; }
+.note-footer-path {
+  font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.note-footer-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-16);
+  color: var(--muted);
+  font: 500 var(--text-xs) / 1 inherit;
+  flex-shrink: 0;
+}
+.note-footer-stats strong {
+  color: var(--fg);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
 }
 .note-preview h1 { font-size: 1.9rem; font-weight: 800; letter-spacing: -0.5px; margin: 0 0 14px; }
 .note-preview h2 { font-size: 1.45rem; font-weight: 700; margin: 26px 0 10px; }

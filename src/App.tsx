@@ -689,6 +689,7 @@ function App() {
           ) : (
             <NoteEditor
               title={noteTitle}
+              relPath={openDoc.relPath}
               initialContent={openDoc.content}
               fileKey={openDoc.relPath}
               onChange={handleNoteChange}
@@ -696,6 +697,8 @@ function App() {
               onModeChange={(m) => updateSettings({ ...settings, noteMode: m })}
               onGenerateTitle={handleGenerateTitle}
               titleBusy={titleBusy}
+              width={settings.noteWidth}
+              onWidthChange={(w) => updateSettings({ ...settings, noteWidth: w })}
             />
           )}
         </div>

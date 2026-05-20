@@ -1,32 +1,34 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import { Eye, Pencil, Wand2 } from "lucide-react";
+import { Eye, Pencil, Wand2, MapPin } from "lucide-react";
 import "katex/dist/katex.min.css";
 import { NoteViewMode } from "../types";
 
 interface NoteEditorProps {
-  /** File name without extension — shown as the title in the header. */
   title: string;
-  /** Initial markdown content from disk. Re-supplied when the active file changes. */
+  /** Vault-relative path of the open file — shown in the footer card. */
+  relPath: string;
   initialContent: string;
-  /** Stable key (the file path) — re-mounts the editor when switched. */
   fileKey: string;
-  /** Saved to disk by the caller (debounced inside). */
   onChange: (next: string) => void;
-  /** Top-right toggle persists to settings. */
   mode: NoteViewMode;
   onModeChange: (mode: NoteViewMode) => void;
-  /** Trigger AI title-generation. Caller renames the file + refreshes tree. */
   onGenerateTitle: (currentContent: string) => void;
-  /** Disable the title-AI button (no API key, or already running). */
   titleBusy?: boolean;
+  /** Width (px) of the card column. Persisted in app settings. */
+  width: number;
+  onWidthChange: (next: number) => void;
 }
+
+const MIN_W = 560;
+const MAX_W = 1200;
 
 export const NoteEditor: React.FC<NoteEditorProps> = ({
   title,
+  relPath,
   initialContent,
   fileKey,
   onChange,
@@ -34,16 +36,16 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   onModeChange,
   onGenerateTitle,
   titleBusy,
+  width,
+  onWidthChange,
 }) => {
   const [value, setValue] = useState(initialContent);
 
-  // Hard reset when the active file changes.
   useEffect(() => {
     setValue(initialContent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileKey]);
 
-  // Debounced save on edits (250ms).
   useEffect(() => {
     if (value === initialContent) return;
     const t = setTimeout(() => onChange(value), 250);
@@ -51,15 +53,38 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
+  // Footer stats: words + chars; cheap to compute on every keystroke.
+  const stats = useMemo(() => {
+    const trimmed = value.trim();
+    const chars = value.length;
+    const words = trimmed.length === 0 ? 0 : trimmed.split(/\s+/).length;
+    const lines = value.length === 0 ? 0 : value.split("\n").length;
+    return { chars, words, lines };
+  }, [value]);
+
+  const cardStyle: React.CSSProperties = { maxWidth: width };
+
   return (
     <div className="note-view">
-      <header className="note-header">
-        <div className="note-header-inner">
+      <div className="note-stack">
+        {/* Title card */}
+        <header className="note-card note-title-card" style={cardStyle}>
           <div className="note-title-block">
             <span className="note-title-eyebrow">Note</span>
             <h1 className="note-title" title={title}>{title}</h1>
           </div>
           <div className="note-header-actions">
+            <div className="note-width-knob" title="Adjust note width">
+              <input
+                type="range"
+                min={MIN_W}
+                max={MAX_W}
+                step={20}
+                value={width}
+                onChange={(e) => onWidthChange(Number(e.target.value))}
+                aria-label="Note width"
+              />
+            </div>
             <button
               type="button"
               className="note-icon-btn"
@@ -80,17 +105,17 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
               {mode === "edit" ? <Eye size={15} /> : <Pencil size={15} />}
             </button>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <div className="note-body">
-        {mode === "edit" ? (
-          <textarea
-            className="note-textarea mono note-pane"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            spellCheck={false}
-            placeholder={
+        {/* Content card */}
+        <div className="note-card note-content-card" style={cardStyle}>
+          {mode === "edit" ? (
+            <textarea
+              className="note-textarea mono"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              spellCheck={false}
+              placeholder={
 `# Title
 
 Write Markdown here. Math works via $E = mc^2$ inline and
@@ -98,18 +123,32 @@ $$
 \\int_0^\\infty e^{-x^2}\\,dx = \\tfrac{\\sqrt{\\pi}}{2}
 $$
 display blocks.`
-            }
-          />
-        ) : (
-          <div className="note-preview note-pane">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath]}
-              rehypePlugins={[rehypeKatex]}
-            >
-              {value || ""}
-            </ReactMarkdown>
+              }
+            />
+          ) : (
+            <div className="note-preview">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeKatex]}
+              >
+                {value || ""}
+              </ReactMarkdown>
+            </div>
+          )}
+        </div>
+
+        {/* Footer card: shows where the file lives + content stats */}
+        <footer className="note-card note-footer-card" style={cardStyle}>
+          <div className="note-footer-loc" title={relPath}>
+            <MapPin size={12} />
+            <span className="note-footer-path">{relPath}</span>
           </div>
-        )}
+          <div className="note-footer-stats">
+            <span><strong>{stats.words.toLocaleString()}</strong> words</span>
+            <span><strong>{stats.chars.toLocaleString()}</strong> chars</span>
+            <span><strong>{stats.lines.toLocaleString()}</strong> lines</span>
+          </div>
+        </footer>
       </div>
     </div>
   );

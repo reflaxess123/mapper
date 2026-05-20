@@ -32,6 +32,8 @@ export interface AppSettings {
   noteMode: NoteViewMode;
   /** Whole-UI zoom factor (1.0 = native). Applied via CSS `zoom`. */
   uiScale: number;
+  /** Width (px) of the note card column — title, body, and footer all share. */
+  noteWidth: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -48,6 +50,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   noteMode: "view",
   uiScale: 1.0,
+  noteWidth: 760,
 };
 
 // Token usage tracking. Stored in <vault>/.mindmapper/tokens.json:
