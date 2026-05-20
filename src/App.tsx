@@ -585,6 +585,44 @@ function App() {
     return walk(entries);
   };
 
+  // ── Manual inline rename from the title bar ────────────────────────────
+  const handleManualRename = useCallback(async (newRawTitle: string) => {
+    if (!openDoc || openDoc.kind !== "md" || !vaultPath) return;
+    const safe = sanitizeFileName(newRawTitle);
+    if (!safe || safe === "untitled") {
+      setError("That name isn't usable.");
+      return;
+    }
+    const slash = openDoc.relPath.lastIndexOf("/");
+    const dirPart = slash >= 0 ? openDoc.relPath.slice(0, slash + 1) : "";
+    let candidate = `${dirPart}${safe}.md`;
+    let n = 2;
+    while (candidate !== openDoc.relPath && existsInTree(candidate)) {
+      candidate = `${dirPart}${safe} ${n}.md`;
+      n++;
+    }
+    if (candidate === openDoc.relPath) return; // nothing to do
+    try {
+      await invoke("rename_vault_file", {
+        vault: vaultPath,
+        from: openDoc.relPath,
+        to: candidate,
+      });
+      if (ledger.byFile[openDoc.relPath]) {
+        ledgerDirtyRef.current = true;
+        setLedger((prev) => {
+          const { [openDoc.relPath]: stat, ...rest } = prev.byFile;
+          return { byFile: { ...rest, [candidate]: stat } };
+        });
+      }
+      setOpenDoc({ ...openDoc, relPath: candidate });
+      await refreshTree(vaultPath);
+    } catch (e: any) {
+      setError(`Rename failed: ${e?.message || e}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openDoc, vaultPath, entries, ledger.byFile, refreshTree]);
+
   // Derive a display title for the current note: basename without ext.
   const noteTitle = (() => {
     if (!openDoc || openDoc.kind !== "md") return "";
@@ -693,6 +731,7 @@ function App() {
               onModeChange={(m) => updateSettings({ ...settings, noteMode: m })}
               onGenerateTitle={handleGenerateTitle}
               titleBusy={titleBusy}
+              onRename={handleManualRename}
               width={settings.noteWidth}
               onWidthChange={(w) => updateSettings({ ...settings, noteWidth: w })}
               fileTokens={fileTokens}

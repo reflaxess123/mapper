@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -18,6 +18,8 @@ interface NoteEditorProps {
   onModeChange: (mode: NoteViewMode) => void;
   onGenerateTitle: (currentContent: string) => void;
   titleBusy?: boolean;
+  /** Manual inline rename — caller does the file move + tree refresh. */
+  onRename: (newTitle: string) => void;
   /** Width (px) of the card column. Persisted in app settings. */
   width: number;
   onWidthChange: (next: number) => void;
@@ -41,16 +43,45 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   onModeChange,
   onGenerateTitle,
   titleBusy,
+  onRename,
   width,
   onWidthChange,
   fileTokens,
 }) => {
   const [value, setValue] = useState(initialContent);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(title);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setValue(initialContent);
+    setEditingTitle(false);
+    setTitleDraft(title);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileKey]);
+
+  // Keep draft synced when caller renames via AI (Wand button).
+  useEffect(() => {
+    if (!editingTitle) setTitleDraft(title);
+  }, [title, editingTitle]);
+
+  useEffect(() => {
+    if (editingTitle && titleInputRef.current) {
+      titleInputRef.current.focus();
+      titleInputRef.current.select();
+    }
+  }, [editingTitle]);
+
+  const commitTitle = () => {
+    const next = titleDraft.trim();
+    if (next && next !== title) onRename(next);
+    setEditingTitle(false);
+  };
+
+  const cancelTitle = () => {
+    setTitleDraft(title);
+    setEditingTitle(false);
+  };
 
   useEffect(() => {
     if (value === initialContent) return;
@@ -71,13 +102,40 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
   const cardStyle: React.CSSProperties = { maxWidth: width };
 
   return (
-    <div className="note-view">
+    <div className={`note-view note-view--${mode}`}>
       <div className="note-stack">
         {/* Title card */}
         <header className="note-card note-title-card" style={cardStyle}>
           <div className="note-title-block">
             <span className="note-title-eyebrow">Note</span>
-            <h1 className="note-title" title={title}>{title}</h1>
+            {editingTitle ? (
+              <input
+                ref={titleInputRef}
+                className="note-title note-title-input"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={commitTitle}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitTitle();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelTitle();
+                  }
+                }}
+                spellCheck={false}
+                aria-label="Note title"
+              />
+            ) : (
+              <h1
+                className="note-title"
+                title="Click to rename"
+                onClick={() => setEditingTitle(true)}
+              >
+                {title}
+              </h1>
+            )}
           </div>
           <div className="note-header-actions">
             <div className="width-levels" role="group" aria-label="Note width">

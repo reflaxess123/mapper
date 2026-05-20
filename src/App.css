@@ -670,6 +670,7 @@ html, body {
   scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
 }
 
+
 /* Dedicated scrollbar for the note column — gentle in both themes,
    slightly more visible than the global 6px one because this is the
    primary scroll surface. */
@@ -747,6 +748,29 @@ html, body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: text;
+}
+/* `.note-title-input` is the inline editor that swaps in when the user
+   clicks the h1. The whole point: it must be visually indistinguishable
+   from the heading — no border, no underline, no padding, same font.
+   Browser-default input chrome is reset back to baseline. */
+.note-title-input {
+  appearance: none;
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+  margin: 0;
+  font: 800 24px / 1.15 inherit;
+  letter-spacing: -0.5px;
+  color: var(--fg);
+  border-radius: 0;
+  box-shadow: none;
+  cursor: text;
+}
+.note-title-input::selection {
+  background: var(--accent-soft);
 }
 
 .note-header-actions {
@@ -829,10 +853,12 @@ html, body {
   border: none;
   outline: none;
   color: var(--fg);
-  resize: vertical;
+  resize: none;
   font-size: 14px;
   line-height: 1.7;
-  min-height: 280px;
+  /* Roughly the viewport height minus titlebar + title-card + footer
+     + gaps. Edit-mode block then visually matches the preview block. */
+  min-height: calc(100vh - 320px);
   scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
 }
 .note-textarea::-webkit-scrollbar { width: 10px; }
