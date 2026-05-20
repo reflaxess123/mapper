@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window — frameless custom titlebar needs explicit start-dragging plus min/max/close.",
+  "description": "Capability for the main window — frameless titlebar drag + folder picker.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -10,6 +10,8 @@
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
-    "core:window:allow-close"
+    "core:window:allow-close",
+    "dialog:default",
+    "dialog:allow-open"
   ]
 }

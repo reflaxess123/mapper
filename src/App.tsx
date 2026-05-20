@@ -1,79 +1,92 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { MindMapNodeData, AppSettings, MindMapMeta } from "./types";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import {
+  AppSettings,
+  DEFAULT_SETTINGS,
+  EMPTY_LEDGER,
+  EMPTY_TOKENS,
+  MindMapNodeData,
+  OpenDoc,
+  TokenLedger,
+  TokenStats,
+  VaultEntry,
+} from "./types";
+import { Sidebar } from "./components/Sidebar";
 import { MindMapCanvas } from "./components/MindMapCanvas";
+import { NoteEditor } from "./components/NoteEditor";
 import { TitleBar } from "./components/TitleBar";
-import { Sparkles, AlertTriangle, X } from "lucide-react";
+import { SettingsModal } from "./components/SettingsModal";
+import { Sparkles, AlertTriangle, X, FolderOpen } from "lucide-react";
 import "./App.css";
 
-const STORAGE_KEY_SETTINGS = "mindmapper_settings";
-const STORAGE_KEY_TOKEN_USAGE = "mindmapper_token_usage";
-const STORAGE_KEY_MAP_TOKENS = "mindmapper_map_tokens";
+// ─── Vault-local config & token paths (inside <vault>/.mindmapper/) ───────
+const CONFIG_FILE = ".mindmapper/config.json";
+const TOKENS_FILE = ".mindmapper/tokens.json";
 
-type TokenStats = { prompt: number; completion: number; total: number };
+// ─── Tauri command wrappers ───────────────────────────────────────────────
+type GenResponse = {
+  data: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
 
-const EMPTY_TOKENS: TokenStats = { prompt: 0, completion: 0, total: 0 };
+async function tauriGetVaultPath(): Promise<string | null> {
+  return await invoke<string | null>("get_vault_path");
+}
+async function tauriSetVaultPath(path: string): Promise<void> {
+  await invoke("set_vault_path", { path });
+}
+async function tauriListTree(vault: string): Promise<VaultEntry[]> {
+  return await invoke<VaultEntry[]>("list_vault_tree", { vault });
+}
+async function tauriReadFile(vault: string, rel: string): Promise<string> {
+  return await invoke<string>("read_vault_file", { vault, rel });
+}
+async function tauriWriteFile(vault: string, rel: string, content: string): Promise<void> {
+  await invoke("write_vault_file", { vault, rel, content });
+}
+async function tauriDeleteFile(vault: string, rel: string): Promise<void> {
+  await invoke("delete_vault_file", { vault, rel });
+}
+
+// Optional read — returns null if the file doesn't exist yet.
+async function readOpt(vault: string, rel: string): Promise<string | null> {
+  try {
+    return await tauriReadFile(vault, rel);
+  } catch {
+    return null;
+  }
+}
 
 function App() {
-  const [settings, setSettings] = useState<AppSettings>(() => {
-    const stored = localStorage.getItem(STORAGE_KEY_SETTINGS);
-    const defaults: AppSettings = {
-      apiKey: "",
-      model: "google/gemini-2.5-flash",
-      theme: "dark",
-    };
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        return { ...defaults, ...parsed };
-      } catch (e) {
-        // use default
-      }
-    }
-    return defaults;
-  });
-
-  const [tokenUsage, setTokenUsage] = useState<TokenStats>(() => {
-    const stored = localStorage.getItem(STORAGE_KEY_TOKEN_USAGE);
-    if (stored) {
-      try {
-        return JSON.parse(stored) as TokenStats;
-      } catch (e) {
-        // use default
-      }
-    }
-    return { ...EMPTY_TOKENS };
-  });
-
-  // Per-map token usage: { [mapId]: TokenStats }. Persisted alongside the
-  // saved mind maps so reopening one shows the historical cost.
-  const [mapTokens, setMapTokens] = useState<Record<string, TokenStats>>(() => {
-    const stored = localStorage.getItem(STORAGE_KEY_MAP_TOKENS);
-    if (stored) {
-      try {
-        return JSON.parse(stored) as Record<string, TokenStats>;
-      } catch (e) {
-        // use default
-      }
-    }
-    return {};
-  });
-
-  const [currentMap, setCurrentMap] = useState<MindMapNodeData | null>(null);
-  const [currentMapId, setCurrentMapId] = useState<string | null>(null);
-  const [savedMaps, setSavedMaps] = useState<MindMapMeta[]>([]);
+  const [vaultPath, setVaultPath] = useState<string | null>(null);
+  const [settings, setSettings] = useState<AppSettings>({ ...DEFAULT_SETTINGS });
+  const [ledger, setLedger] = useState<TokenLedger>(EMPTY_LEDGER);
+  const [entries, setEntries] = useState<VaultEntry[]>([]);
+  const [openDoc, setOpenDoc] = useState<OpenDoc>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [generatingNodeId, setGeneratingNodeId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [topicInput, setTopicInput] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Save settings to localStorage on change
+  // ── Bootstrap: read vault pointer, then load settings + ledger + tree ──
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
-  }, [settings]);
+    (async () => {
+      try {
+        const path = await tauriGetVaultPath();
+        if (path) {
+          await activateVault(path);
+        }
+      } catch (e) {
+        console.error("vault bootstrap failed", e);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Apply theme class to document element on change
+  // ── Theme class ───────────────────────────────────────────────────────
   useEffect(() => {
     const root = document.documentElement;
     if (settings.theme === "light") {
@@ -85,312 +98,345 @@ function App() {
     }
   }, [settings.theme]);
 
-  // Save token usage to localStorage on change
+  // ── Settings I/O ──────────────────────────────────────────────────────
+  // We debounce-persist to disk on every change so the user never has to
+  // hit "save."
+  const settingsDirtyRef = useRef(false);
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_TOKEN_USAGE, JSON.stringify(tokenUsage));
-  }, [tokenUsage]);
+    if (!vaultPath) return;
+    if (!settingsDirtyRef.current) return;
+    const t = setTimeout(() => {
+      tauriWriteFile(vaultPath, CONFIG_FILE, JSON.stringify(settings, null, 2)).catch(
+        (err) => console.error("save settings:", err),
+      );
+      settingsDirtyRef.current = false;
+    }, 300);
+    return () => clearTimeout(t);
+  }, [settings, vaultPath]);
 
-  // Save per-map tokens whenever the dict changes
+  const updateSettings = useCallback((next: AppSettings) => {
+    settingsDirtyRef.current = true;
+    setSettings(next);
+  }, []);
+
+  // ── Ledger I/O ────────────────────────────────────────────────────────
+  const ledgerDirtyRef = useRef(false);
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_MAP_TOKENS, JSON.stringify(mapTokens));
-  }, [mapTokens]);
+    if (!vaultPath) return;
+    if (!ledgerDirtyRef.current) return;
+    const t = setTimeout(() => {
+      tauriWriteFile(vaultPath, TOKENS_FILE, JSON.stringify(ledger, null, 2)).catch(
+        (err) => console.error("save tokens:", err),
+      );
+      ledgerDirtyRef.current = false;
+    }, 300);
+    return () => clearTimeout(t);
+  }, [ledger, vaultPath]);
 
-  // Helper: add a delta to both global and the current-map counter
-  const addTokens = (mapId: string, delta: TokenStats) => {
-    setTokenUsage((prev) => ({
-      prompt: prev.prompt + delta.prompt,
-      completion: prev.completion + delta.completion,
-      total: prev.total + delta.total,
-    }));
-    setMapTokens((prev) => {
-      const cur = prev[mapId] ?? EMPTY_TOKENS;
+  // ── Vault activation & tree refresh ───────────────────────────────────
+  const refreshTree = useCallback(async (vault: string) => {
+    try {
+      const tree = await tauriListTree(vault);
+      setEntries(tree);
+    } catch (e: any) {
+      setError(`Failed to read vault: ${e?.message || e}`);
+    }
+  }, []);
+
+  const activateVault = useCallback(async (path: string) => {
+    await tauriSetVaultPath(path);
+    setVaultPath(path);
+    setOpenDoc(null);
+
+    // Load settings (or fall back to defaults & write them on first run)
+    const cfg = await readOpt(path, CONFIG_FILE);
+    let nextSettings: AppSettings = { ...DEFAULT_SETTINGS };
+    if (cfg) {
+      try {
+        const parsed = JSON.parse(cfg);
+        nextSettings = { ...DEFAULT_SETTINGS, ...parsed, s3: { ...DEFAULT_SETTINGS.s3, ...(parsed.s3 || {}) } };
+      } catch (e) {
+        console.error("config.json parse:", e);
+      }
+    }
+    setSettings(nextSettings);
+
+    // Load token ledger
+    const tk = await readOpt(path, TOKENS_FILE);
+    let nextLedger: TokenLedger = { all: { ...EMPTY_TOKENS }, byFile: {} };
+    if (tk) {
+      try {
+        nextLedger = JSON.parse(tk) as TokenLedger;
+      } catch (e) {
+        console.error("tokens.json parse:", e);
+      }
+    }
+    setLedger(nextLedger);
+
+    await refreshTree(path);
+  }, [refreshTree]);
+
+  const handlePickVault = useCallback(async () => {
+    try {
+      const result = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Pick your MindMapper vault folder",
+      });
+      if (typeof result === "string" && result.length > 0) {
+        await activateVault(result);
+        setSettingsOpen(false);
+      }
+    } catch (e: any) {
+      setError(`Could not pick folder: ${e?.message || e}`);
+    }
+  }, [activateVault]);
+
+  // ── Token bookkeeping ─────────────────────────────────────────────────
+  const addTokens = useCallback((relPath: string, delta: TokenStats) => {
+    ledgerDirtyRef.current = true;
+    setLedger((prev) => {
+      const fileBefore = prev.byFile[relPath] ?? EMPTY_TOKENS;
       return {
-        ...prev,
-        [mapId]: {
-          prompt: cur.prompt + delta.prompt,
-          completion: cur.completion + delta.completion,
-          total: cur.total + delta.total,
+        all: {
+          prompt: prev.all.prompt + delta.prompt,
+          completion: prev.all.completion + delta.completion,
+          total: prev.all.total + delta.total,
+        },
+        byFile: {
+          ...prev.byFile,
+          [relPath]: {
+            prompt: fileBefore.prompt + delta.prompt,
+            completion: fileBefore.completion + delta.completion,
+            total: fileBefore.total + delta.total,
+          },
         },
       };
     });
-  };
-
-  // Load saved maps list on startup
-  useEffect(() => {
-    refreshSavedMaps();
   }, []);
 
-  const refreshSavedMaps = async () => {
+  // ── Open / save documents ─────────────────────────────────────────────
+  const handleOpenFile = useCallback(async (entry: VaultEntry) => {
+    if (!vaultPath || entry.kind === "dir") return;
     try {
-      const list = await invoke<MindMapMeta[]>("list_mindmaps");
-      setSavedMaps(list);
-    } catch (err: any) {
-      console.error("Failed to list mind maps:", err);
+      const raw = await tauriReadFile(vaultPath, entry.path);
+      if (entry.kind === "md") {
+        setOpenDoc({ kind: "md", relPath: entry.path, content: raw });
+      } else if (entry.kind === "mindmap") {
+        const tree: MindMapNodeData = JSON.parse(raw);
+        setOpenDoc({ kind: "mindmap", relPath: entry.path, tree });
+      } else {
+        // Treat anything else as plain text in the markdown editor.
+        setOpenDoc({ kind: "md", relPath: entry.path, content: raw });
+      }
+    } catch (e: any) {
+      setError(`Could not open ${entry.path}: ${e?.message || e}`);
     }
-  };
+  }, [vaultPath]);
 
-  const handleSettingsChange = (newSettings: AppSettings) => {
-    setSettings(newSettings);
-  };
-
-  // Helper to deep clone the mind map tree
-  const cloneTree = (tree: MindMapNodeData): MindMapNodeData => {
-    return JSON.parse(JSON.stringify(tree));
-  };
-
-  // Save current mind map
-  const saveCurrentMapState = async (updatedTree: MindMapNodeData, mapId: string) => {
+  const handleDeleteFile = useCallback(async (entry: VaultEntry) => {
+    if (!vaultPath) return;
     try {
-      await invoke("save_mindmap", {
-        id: mapId,
-        data: JSON.stringify(updatedTree),
-      });
-      refreshSavedMaps();
-    } catch (err: any) {
-      setError(`Failed to save changes: ${err.message || err}`);
+      await tauriDeleteFile(vaultPath, entry.path);
+      if (openDoc && openDoc.relPath === entry.path) setOpenDoc(null);
+      // Drop the per-file counter; all-time stays untouched
+      if (ledger.byFile[entry.path]) {
+        ledgerDirtyRef.current = true;
+        setLedger((prev) => {
+          const { [entry.path]: _, ...rest } = prev.byFile;
+          return { ...prev, byFile: rest };
+        });
+      }
+      await refreshTree(vaultPath);
+    } catch (e: any) {
+      setError(`Could not delete ${entry.path}: ${e?.message || e}`);
     }
+  }, [vaultPath, openDoc, ledger.byFile, refreshTree]);
+
+  // ── Generation (note / mindmap) ───────────────────────────────────────
+  const sanitizeFileName = (s: string): string => {
+    return s
+      .replace(/[<>:"/\\|?* -]/g, " ")
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 64) || "untitled";
   };
 
-  // Generate new mind map
-  const handleGenerate = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!topicInput.trim()) return;
+  const uniqueName = async (base: string, ext: string): Promise<string> => {
+    // Find a free `<base>.ext`, `<base> 2.ext`, … inside the vault.
+    if (!vaultPath) return `${base}.${ext}`;
+    const isTaken = (name: string) => {
+      const walk = (arr: VaultEntry[]): boolean =>
+        arr.some((e) => (e.name === name) || (e.children && walk(e.children)));
+      return walk(entries);
+    };
+    let candidate = `${base}.${ext}`;
+    let n = 2;
+    while (isTaken(candidate)) {
+      candidate = `${base} ${n}.${ext}`;
+      n++;
+    }
+    return candidate;
+  };
 
-    if (!settings.apiKey.trim()) {
-      setError("Please set your OpenRouter API Key in the settings panel first.");
+  const surfaceError = (raw: string, fallback: string) => {
+    setError(
+      raw.startsWith("OpenRouter") || raw.startsWith("Failed to")
+        ? raw
+        : `${fallback}: ${raw || "Unknown error"}`,
+    );
+  };
+
+  const handleGenerate = useCallback(async (kind: "note" | "mindmap", topic: string) => {
+    if (!vaultPath) {
+      setError("Pick a vault folder first.");
       return;
     }
-
+    if (!settings.apiKey.trim()) {
+      setError("Set your OpenRouter API key in Settings first.");
+      return;
+    }
     setIsLoading(true);
     setError(null);
-
     try {
-      const responseStr = await invoke<string>("generate_mindmap", {
+      const cmd = kind === "mindmap" ? "generate_mindmap" : "generate_note";
+      const responseStr = await invoke<string>(cmd, {
         apiKey: settings.apiKey.trim(),
-        topic: topicInput.trim(),
+        topic,
         model: settings.model,
       });
+      const r: GenResponse = JSON.parse(responseStr);
 
-      const responseObj = JSON.parse(responseStr);
-      const parsed: MindMapNodeData = JSON.parse(responseObj.data);
-      const newId = `map-${Date.now()}`;
+      const safe = sanitizeFileName(topic);
+      const ext = kind === "mindmap" ? "mindmap" : "md";
+      const name = await uniqueName(safe, ext);
 
-      // Update token usage (global + per-map)
-      addTokens(newId, {
-        prompt: responseObj.prompt_tokens,
-        completion: responseObj.completion_tokens,
-        total: responseObj.total_tokens,
+      if (kind === "mindmap") {
+        // Persist as JSON, opens in canvas
+        await tauriWriteFile(vaultPath, name, r.data);
+        const tree: MindMapNodeData = JSON.parse(r.data);
+        setOpenDoc({ kind: "mindmap", relPath: name, tree });
+      } else {
+        // Markdown body straight to file
+        await tauriWriteFile(vaultPath, name, r.data);
+        setOpenDoc({ kind: "md", relPath: name, content: r.data });
+      }
+
+      addTokens(name, {
+        prompt: r.prompt_tokens,
+        completion: r.completion_tokens,
+        total: r.total_tokens,
       });
-
-      setCurrentMap(parsed);
-      setCurrentMapId(newId);
-      setTopicInput("");
-
-      // Save it immediately
-      await saveCurrentMapState(parsed, newId);
+      await refreshTree(vaultPath);
     } catch (err: any) {
-      // Backend already produces user-readable messages (incl. OpenRouter
-      // friendly errors). Only add the "Generation failed" prefix when the
-      // error doesn't already start with a recognizable provider.
-      const raw = String(err?.message || err || "");
-      setError(
-        raw.startsWith("OpenRouter") || raw.startsWith("Failed to")
-          ? raw
-          : `Generation failed: ${raw || "Unknown error"}`,
-      );
+      surfaceError(String(err?.message || err || ""), "Generation failed");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [vaultPath, settings.apiKey, settings.model, addTokens, refreshTree, entries]);
 
-  // Load saved mind map
-  const handleLoadMap = async (id: string) => {
-    setError(null);
+  // ── Mindmap operations (mirrors the old App logic but writes to disk) ─
+  const cloneTree = (t: MindMapNodeData): MindMapNodeData => JSON.parse(JSON.stringify(t));
+
+  const persistMindmap = useCallback(async (relPath: string, tree: MindMapNodeData) => {
+    if (!vaultPath) return;
     try {
-      const dataStr = await invoke<string>("load_mindmap", { id });
-      const parsed: MindMapNodeData = JSON.parse(dataStr);
-      setCurrentMap(parsed);
-      setCurrentMapId(id);
-    } catch (err: any) {
-      setError(`Failed to load mind map: ${err.message || err}`);
+      await tauriWriteFile(vaultPath, relPath, JSON.stringify(tree, null, 2));
+    } catch (e: any) {
+      setError(`Failed to save mind map: ${e?.message || e}`);
     }
-  };
+  }, [vaultPath]);
 
-  // Delete saved mind map
-  const handleDeleteMap = async (id: string) => {
-    try {
-      await invoke("delete_mindmap", { id });
-      if (currentMapId === id) {
-        setCurrentMap(null);
-        setCurrentMapId(null);
-      }
-      // Drop the per-map counter too — total stays as-is so the
-      // lifetime number doesn't shrink when the user cleans up.
-      setMapTokens((prev) => {
-        if (!(id in prev)) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      refreshSavedMaps();
-    } catch (err: any) {
-      setError(`Failed to delete mind map: ${err.message || err}`);
-    }
-  };
+  const mutateMindmap = useCallback((mutate: (root: MindMapNodeData) => void) => {
+    if (!openDoc || openDoc.kind !== "mindmap") return;
+    const updated = cloneTree(openDoc.tree);
+    mutate(updated);
+    setOpenDoc({ ...openDoc, tree: updated });
+    persistMindmap(openDoc.relPath, updated);
+  }, [openDoc, persistMindmap]);
 
-  // Create new blank workspace
-  const handleNewMap = () => {
-    setCurrentMap(null);
-    setCurrentMapId(null);
-    setError(null);
-    setTopicInput("");
-  };
-
-  // Toggle Collapse
   const handleToggleCollapse = (id: string) => {
-    if (!currentMap || !currentMapId) return;
-
-    const updated = cloneTree(currentMap);
-    
-    const toggle = (node: MindMapNodeData): boolean => {
-      if (node.id === id) {
-        node.isCollapsed = !node.isCollapsed;
-        return true;
-      }
-      if (node.children) {
-        for (const child of node.children) {
-          if (toggle(child)) return true;
+    mutateMindmap((root) => {
+      const visit = (n: MindMapNodeData): boolean => {
+        if (n.id === id) {
+          n.isCollapsed = !n.isCollapsed;
+          return true;
         }
-      }
-      return false;
-    };
-
-    toggle(updated);
-    setCurrentMap(updated);
-    saveCurrentMapState(updated, currentMapId);
+        return !!n.children?.some(visit);
+      };
+      visit(root);
+    });
   };
 
-  // Edit Node Label
   const handleEditNode = (id: string, newName: string) => {
-    if (!currentMap || !currentMapId) return;
-
-    const updated = cloneTree(currentMap);
-
-    const updateName = (node: MindMapNodeData): boolean => {
-      if (node.id === id) {
-        node.name = newName;
-        return true;
-      }
-      if (node.children) {
-        for (const child of node.children) {
-          if (updateName(child)) return true;
+    mutateMindmap((root) => {
+      const visit = (n: MindMapNodeData): boolean => {
+        if (n.id === id) {
+          n.name = newName;
+          return true;
         }
-      }
-      return false;
-    };
-
-    updateName(updated);
-    setCurrentMap(updated);
-    saveCurrentMapState(updated, currentMapId);
+        return !!n.children?.some(visit);
+      };
+      visit(root);
+    });
   };
 
-  // Delete Node
   const handleDeleteNode = (id: string) => {
-    if (!currentMap || !currentMapId) return;
-    
-    const updated = cloneTree(currentMap);
-
-    // Root node cannot be deleted
-    if (updated.id === id) {
+    if (!openDoc || openDoc.kind !== "mindmap") return;
+    if (openDoc.tree.id === id) {
       setError("Root node cannot be deleted.");
       return;
     }
-
-    const removeNode = (parent: MindMapNodeData): boolean => {
-      if (parent.children) {
-        const index = parent.children.findIndex((child) => child.id === id);
-        if (index !== -1) {
-          parent.children.splice(index, 1);
+    mutateMindmap((root) => {
+      const visit = (n: MindMapNodeData): boolean => {
+        if (!n.children) return false;
+        const idx = n.children.findIndex((c) => c.id === id);
+        if (idx !== -1) {
+          n.children.splice(idx, 1);
           return true;
         }
-        for (const child of parent.children) {
-          if (removeNode(child)) return true;
-        }
-      }
-      return false;
-    };
-
-    removeNode(updated);
-    setCurrentMap(updated);
-    saveCurrentMapState(updated, currentMapId);
+        return n.children.some(visit);
+      };
+      visit(root);
+    });
   };
 
-  // Add Manual Child Node
   const handleAddChildNode = (parentId: string) => {
-    if (!currentMap || !currentMapId) return;
-
-    const updated = cloneTree(currentMap);
-    const newChildId = `node-${Date.now()}`;
-
-    const addChild = (node: MindMapNodeData): boolean => {
-      if (node.id === parentId) {
-        if (!node.children) {
-          node.children = [];
+    mutateMindmap((root) => {
+      const newId = `node-${Date.now()}`;
+      const visit = (n: MindMapNodeData): boolean => {
+        if (n.id === parentId) {
+          if (!n.children) n.children = [];
+          n.children.push({ id: newId, name: "New Subtopic", children: [], isCollapsed: false });
+          n.isCollapsed = false;
+          return true;
         }
-        node.children.push({
-          id: newChildId,
-          name: "New Subtopic",
-          children: [],
-          isCollapsed: false,
-        });
-        node.isCollapsed = false; // Expand parent to show the new node
-        return true;
-      }
-      if (node.children) {
-        for (const child of node.children) {
-          if (addChild(child)) return true;
-        }
-      }
-      return false;
-    };
-
-    addChild(updated);
-    setCurrentMap(updated);
-    saveCurrentMapState(updated, currentMapId);
+        return !!n.children?.some(visit);
+      };
+      visit(root);
+    });
   };
 
-  // Expand Node with AI (OpenRouter API)
   const handleAiExpandNode = async (nodeId: string) => {
-    if (!currentMap || !currentMapId) return;
-
+    if (!openDoc || openDoc.kind !== "mindmap" || !vaultPath) return;
     if (!settings.apiKey.trim()) {
-      setError("Please configure your OpenRouter API Key in the settings panel first.");
+      setError("Set your OpenRouter API key in Settings first.");
       return;
     }
-
     setGeneratingNodeId(nodeId);
     setError(null);
 
-    const updated = cloneTree(currentMap);
-    
-    // Find node and its name
-    let targetNodeName = "";
-    const findNodeName = (node: MindMapNodeData): boolean => {
-      if (node.id === nodeId) {
-        targetNodeName = node.name;
+    const tree = cloneTree(openDoc.tree);
+    let targetName = "";
+    const find = (n: MindMapNodeData): boolean => {
+      if (n.id === nodeId) {
+        targetName = n.name;
         return true;
       }
-      if (node.children) {
-        for (const child of node.children) {
-          if (findNodeName(child)) return true;
-        }
-      }
-      return false;
+      return !!n.children?.some(find);
     };
-
-    findNodeName(updated);
-
-    if (!targetNodeName) {
+    find(tree);
+    if (!targetName) {
       setError("Target node not found.");
       setGeneratingNodeId(null);
       return;
@@ -399,81 +445,79 @@ function App() {
     try {
       const responseStr = await invoke<string>("extend_node", {
         apiKey: settings.apiKey.trim(),
-        topicContext: currentMap.name, // Send overall context theme (root node name)
-        nodeLabel: targetNodeName,
+        topicContext: tree.name,
+        nodeLabel: targetName,
         model: settings.model,
       });
+      const r: GenResponse = JSON.parse(responseStr);
+      const newChildren: MindMapNodeData[] = JSON.parse(r.data);
 
-      const responseObj = JSON.parse(responseStr);
-      const newChildren: MindMapNodeData[] = JSON.parse(responseObj.data);
-
-      // Update token usage (global + per-map)
-      addTokens(currentMapId, {
-        prompt: responseObj.prompt_tokens,
-        completion: responseObj.completion_tokens,
-        total: responseObj.total_tokens,
-      });
-
-      // Append new children to target node in tree
-      const appendChildren = (node: MindMapNodeData): boolean => {
-        if (node.id === nodeId) {
-          if (!node.children) {
-            node.children = [];
+      const append = (n: MindMapNodeData): boolean => {
+        if (n.id === nodeId) {
+          if (!n.children) n.children = [];
+          const taken = new Set(n.children.map((c) => c.id));
+          for (const c of newChildren) {
+            if (taken.has(c.id)) c.id = `node-${Math.random().toString(36).slice(2, 11)}`;
+            n.children.push(c);
           }
-          // Merge children, ensuring unique IDs and keeping existing children
-          const existingIds = new Set(node.children.map(c => c.id));
-          newChildren.forEach(child => {
-            if (!existingIds.has(child.id)) {
-              node.children.push(child);
-            } else {
-              // Ensure uniqueness if model duplicates IDs
-              child.id = `node-${Math.random().toString(36).substr(2, 9)}`;
-              node.children.push(child);
-            }
-          });
-          node.isCollapsed = false; // Expand node to show new subtopics
+          n.isCollapsed = false;
           return true;
         }
-        if (node.children) {
-          for (const child of node.children) {
-            if (appendChildren(child)) return true;
-          }
-        }
-        return false;
+        return !!n.children?.some(append);
       };
-
-      appendChildren(updated);
-      setCurrentMap(updated);
-      await saveCurrentMapState(updated, currentMapId);
+      append(tree);
+      setOpenDoc({ ...openDoc, tree });
+      await persistMindmap(openDoc.relPath, tree);
+      addTokens(openDoc.relPath, {
+        prompt: r.prompt_tokens,
+        completion: r.completion_tokens,
+        total: r.total_tokens,
+      });
     } catch (err: any) {
-      const raw = String(err?.message || err || "");
-      setError(
-        raw.startsWith("OpenRouter") || raw.startsWith("Failed to")
-          ? raw
-          : `AI expansion failed: ${raw || "Unknown error"}`,
-      );
+      surfaceError(String(err?.message || err || ""), "AI expansion failed");
     } finally {
       setGeneratingNodeId(null);
     }
   };
 
+  // ── Note content save (debounced inside the editor) ───────────────────
+  const handleNoteChange = useCallback(async (next: string) => {
+    if (!openDoc || openDoc.kind !== "md" || !vaultPath) return;
+    try {
+      await tauriWriteFile(vaultPath, openDoc.relPath, next);
+      setOpenDoc({ ...openDoc, content: next });
+    } catch (e: any) {
+      setError(`Failed to save note: ${e?.message || e}`);
+    }
+  }, [openDoc, vaultPath]);
+
+  // ── Derived: per-file tokens for current open doc, if AI-generated ────
+  const fileTokens: TokenStats | null = useMemo(() => {
+    if (!openDoc) return null;
+    const t = ledger.byFile[openDoc.relPath];
+    if (!t || t.total === 0) return null;
+    return t;
+  }, [openDoc, ledger]);
+
+  // ── Render ────────────────────────────────────────────────────────────
   return (
     <div className="app-container">
-      {/* Sidebar runs the full window height — sits left of the titlebar
-          so it isn't clipped by it. */}
-      <SettingsPanel
+      <Sidebar
         settings={settings}
-        onSettingsChange={handleSettingsChange}
-        savedMaps={savedMaps}
-        currentMapId={currentMapId}
-        onLoadMap={handleLoadMap}
-        onDeleteMap={handleDeleteMap}
-        onNewMap={handleNewMap}
-        tokenUsage={tokenUsage}
-        currentMapTokens={currentMapId ? mapTokens[currentMapId] ?? EMPTY_TOKENS : null}
+        onSettingsChange={updateSettings}
+        vaultPath={vaultPath}
+        onPickVault={handlePickVault}
+        entries={entries}
+        activePath={openDoc?.relPath ?? null}
+        onOpenFile={handleOpenFile}
+        onDeleteFile={handleDeleteFile}
+        onGenerate={handleGenerate}
+        isGenerating={isLoading}
+        totalTokens={ledger.all}
+        fileTokens={fileTokens}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      {/* Right column: titlebar above workspace */}
       <div className="main-column">
         <TitleBar />
 
@@ -491,13 +535,45 @@ function App() {
           {isLoading && (
             <div className="app-loader-overlay">
               <Sparkles size={48} className="loader-sparkle" />
-              <p>Generating mind map with AI...</p>
+              <p>Generating with AI…</p>
             </div>
           )}
 
-          {currentMap ? (
+          {!vaultPath ? (
+            <div className="welcome-overlay">
+              <div className="welcome-content">
+                <div className="welcome-logo">
+                  <img src="/icon.png" alt="MindMapper" />
+                </div>
+                <h1>Welcome to MindMapper</h1>
+                <p>
+                  Pick a folder to use as your vault. All your notes and mind
+                  maps live there as plain files — <code>.md</code> for notes,{" "}
+                  <code>.mindmap</code> for trees. Settings sit in a hidden
+                  <code> .mindmapper/ </code>subfolder.
+                </p>
+                <button className="welcome-submit-btn" onClick={handlePickVault}>
+                  <FolderOpen size={16} /> Choose vault folder
+                </button>
+              </div>
+            </div>
+          ) : !openDoc ? (
+            <div className="welcome-overlay">
+              <div className="welcome-content">
+                <div className="welcome-logo">
+                  <img src="/icon.png" alt="MindMapper" />
+                </div>
+                <h1>Vault ready</h1>
+                <p>
+                  Pick a file on the left to open it, or use the generator above
+                  the file tree to spin up a new <strong>note</strong> or{" "}
+                  <strong>mind map</strong> by topic.
+                </p>
+              </div>
+            </div>
+          ) : openDoc.kind === "mindmap" ? (
             <MindMapCanvas
-              data={currentMap}
+              data={openDoc.tree}
               onToggleCollapse={handleToggleCollapse}
               onEdit={handleEditNode}
               onDelete={handleDeleteNode}
@@ -506,43 +582,28 @@ function App() {
               generatingNodeId={generatingNodeId}
             />
           ) : (
-            <div className="welcome-overlay">
-              <div className="welcome-content">
-                <div className="welcome-logo">
-                  <img src="/icon.png" alt="MindMapper" />
-                </div>
-                <h1>Interactive Mind Maps</h1>
-                <p>
-                  Transform any concept or topic into a structured visual mind map in seconds.
-                  Enter your topic below to get started. You can expand nodes with AI, add subtopics,
-                  and navigate the tree interactively.
-                </p>
-
-                <form onSubmit={handleGenerate}>
-                  <div className="welcome-input-group">
-                    <input
-                      type="text"
-                      value={topicInput}
-                      onChange={(e) => setTopicInput(e.target.value)}
-                      placeholder="Enter a topic (e.g. 'Quantum Computing Basics', 'History of Art')"
-                      className="welcome-input"
-                      disabled={isLoading}
-                    />
-                    <button type="submit" disabled={isLoading} className="welcome-submit-btn">
-                      <Sparkles size={18} /> Generate
-                    </button>
-                  </div>
-                  {!settings.apiKey && (
-                    <div className="welcome-warning">
-                      <AlertTriangle size={14} /> Please configure your OpenRouter API Key in the left settings panel first!
-                    </div>
-                  )}
-                </form>
-              </div>
-            </div>
+            <NoteEditor
+              initialContent={openDoc.content}
+              fileKey={openDoc.relPath}
+              onChange={handleNoteChange}
+              editorPaneWidth={settings.editorPaneWidth}
+              onEditorPaneWidthChange={(w) =>
+                updateSettings({ ...settings, editorPaneWidth: w })
+              }
+            />
           )}
         </div>
       </div>
+
+      {settingsOpen && (
+        <SettingsModal
+          settings={settings}
+          vaultPath={vaultPath}
+          onChange={updateSettings}
+          onClose={() => setSettingsOpen(false)}
+          onPickVault={handlePickVault}
+        />
+      )}
     </div>
   );
 }

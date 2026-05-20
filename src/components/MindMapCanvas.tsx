@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from "react";
 import * as d3 from "d3-hierarchy";
 import { MindMapNodeData } from "../types";
 import { MindMapNode } from "./MindMapNode";
-import { ZoomIn, ZoomOut, Maximize2, Download } from "lucide-react";
+// no toolbar — pan via middle-mouse, zoom via wheel
 
 interface MindMapCanvasProps {
   data: MindMapNodeData;
@@ -185,100 +185,12 @@ export const MindMapCanvas: React.FC<MindMapCanvasProps> = ({
     return 0.4;
   };
 
-  // Zoom controls
-  const zoomIn = () => {
-    setScale((prev) => Math.min(prev * 1.2, 3));
-  };
-
-  const zoomOut = () => {
-    setScale((prev) => Math.max(prev * 0.8, 0.15));
-  };
-
-  const resetView = () => {
-    if (containerRef.current) {
-      const rect = containerRef.current.getBoundingClientRect();
-      setScale(1);
-      setTranslateX(150);
-      setTranslateY(rect.height / 2 - 30);
-    }
-  };
-
-  // Export functions
-  const exportAsSVG = () => {
-    const svgElement = document.querySelector(".mindmap-svg");
-    if (!svgElement) return;
-
-    // Clone SVG to modify styling for standalone export
-    const svgClone = svgElement.cloneNode(true) as SVGElement;
-    svgClone.setAttribute("width", "1200");
-    svgClone.setAttribute("height", "800");
-    svgClone.setAttribute("viewBox", "-100 -400 1400 800");
-    svgClone.style.background = "#0b0f19";
-
-    const serializer = new XMLSerializer();
-    const source = serializer.serializeToString(svgClone);
-    
-    const blob = new Blob([source], { type: "image/svg+xml;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `mindmap-${Date.now()}.svg`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const exportAsPNG = () => {
-    const svgElement = document.querySelector(".mindmap-svg");
-    if (!svgElement) return;
-
-    const serializer = new XMLSerializer();
-    const svgString = serializer.serializeToString(svgElement);
-    const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
-    const URL = window.URL || window.webkitURL || window;
-    const blobURL = URL.createObjectURL(svgBlob);
-    
-    const image = new Image();
-    image.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = 1600;
-      canvas.height = 1000;
-      const context = canvas.getContext("2d");
-      if (context) {
-        // Draw background
-        context.fillStyle = "#0b0f19";
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // Draw elements with padding
-        context.drawImage(image, 100, 100, 1400, 800);
-        
-        const pngURL = canvas.toDataURL("image/png");
-        const downloadLink = document.createElement("a");
-        downloadLink.href = pngURL;
-        downloadLink.download = `mindmap-${Date.now()}.png`;
-        document.body.appendChild(downloadLink);
-        downloadLink.click();
-        document.body.removeChild(downloadLink);
-      }
-    };
-    image.src = blobURL;
-  };
-
   return (
     <div
       ref={containerRef}
       className="canvas-container"
       onMouseDown={handleMouseDown}
     >
-      {/* Floating Canvas Controls */}
-      <div className="canvas-controls">
-        <button onClick={zoomIn} title="Zoom In"><ZoomIn size={18} /></button>
-        <button onClick={zoomOut} title="Zoom Out"><ZoomOut size={18} /></button>
-        <button onClick={resetView} title="Center View"><Maximize2 size={18} /></button>
-        <button onClick={exportAsSVG} title="Export as SVG"><Download size={18} /> SVG</button>
-        <button onClick={exportAsPNG} title="Export as PNG"><Download size={18} /> PNG</button>
-      </div>
-
       {/* Drawing Space with Zoom and Translate transforms */}
       <div
         ref={canvasRef}

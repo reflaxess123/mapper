@@ -1,6 +1,23 @@
-use tauri::Manager;
+// MindMapper — vault-based backend.
+//
+// Storage model (Obsidian-style):
+//   <vault>/
+//     .mindmapper/
+//       config.json     # app settings (api key, model, s3, theme)
+//       tokens.json     # per-file token usage tracking
+//     foo.md            # markdown notes
+//     bar.mindmap       # mind-map JSON (custom extension)
+//     Subfolder/...
+//
+// The frontend picks/changes the vault folder via the dialog plugin and
+// stores the path in `<config_dir>/mindmapper/vault.json` so we remember
+// it across launches.
+
 use std::fs;
-use std::time::SystemTime;
+use std::path::{Path, PathBuf};
+use tauri::Manager;
+
+// ─── OpenRouter request/response types ─────────────────────────────────────
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct OpenRouterMessage {
@@ -46,29 +63,28 @@ struct GenerationResponse {
     total_tokens: u32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct MindMapMeta {
-    id: String,
+// ─── Vault tree types ──────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct VaultEntry {
+    /// Path relative to the vault root, forward-slash separated.
+    path: String,
+    /// Base name with extension.
     name: String,
-    modified: u64,
+    /// "dir" | "md" | "mindmap" | "other"
+    kind: String,
+    /// `null` for files; recursive list of children for directories.
+    children: Option<Vec<VaultEntry>>,
+    /// Last-modified unix seconds (files only).
+    modified: Option<u64>,
 }
 
-#[derive(serde::Deserialize)]
-struct ShortMindMap {
-    name: Option<String>,
-}
+// ─── Helpers ───────────────────────────────────────────────────────────────
 
-/// Extracts a short, user-readable message from an OpenRouter error body.
-/// OpenRouter wraps failures in `{ "error": { "code": .., "message": .. } }`;
-/// when present we surface just the message so the UI banner stays
-/// digestible instead of dumping the full JSON payload at the user.
 fn friendly_openrouter_error(status: reqwest::StatusCode, body: &str) -> String {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
         if let Some(err_obj) = json.get("error") {
-            let msg = err_obj
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let msg = err_obj.get("message").and_then(|v| v.as_str()).unwrap_or("");
             let code = err_obj
                 .get("code")
                 .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
@@ -82,7 +98,6 @@ fn friendly_openrouter_error(status: reqwest::StatusCode, body: &str) -> String 
             }
         }
     }
-    // Fall back to the raw body but trim absurdly long payloads.
     let trimmed = if body.len() > 600 {
         format!("{}…", &body[..600])
     } else {
@@ -91,7 +106,6 @@ fn friendly_openrouter_error(status: reqwest::StatusCode, body: &str) -> String 
     format!("OpenRouter API error (status {}): {}", status, trimmed)
 }
 
-// Clean markdown code blocks from AI response
 fn parse_json_from_llm(response: &str) -> Result<String, String> {
     let clean = response.trim();
     let mut parsed = clean;
@@ -104,12 +118,278 @@ fn parse_json_from_llm(response: &str) -> Result<String, String> {
         parsed = &parsed[..end];
     }
     let parsed_str = parsed.trim().to_string();
-    
-    // Validate it is valid JSON
     let _: serde_json::Value = serde_json::from_str(&parsed_str)
         .map_err(|e| format!("Failed to parse JSON: {}. Raw: {}", e, parsed_str))?;
-        
     Ok(parsed_str)
+}
+
+/// Strip optional ````md` / ``` ``` fences the LLM tends to wrap notes in.
+fn strip_markdown_fences(s: &str) -> String {
+    let trimmed = s.trim();
+    let stripped = if trimmed.starts_with("```") {
+        // remove the first line up through the newline
+        let after = trimmed.splitn(2, '\n').nth(1).unwrap_or("");
+        if let Some(end) = after.rfind("```") {
+            after[..end].trim_end().to_string()
+        } else {
+            after.to_string()
+        }
+    } else {
+        trimmed.to_string()
+    };
+    stripped
+}
+
+/// Path to the file that remembers the user's vault choice.
+fn vault_pointer_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("vault.json"))
+}
+
+/// Convert a filesystem path into "/"-separated, vault-relative form.
+fn rel_path(vault: &Path, p: &Path) -> Option<String> {
+    p.strip_prefix(vault)
+        .ok()
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+}
+
+fn classify_file(name: &str) -> &'static str {
+    let lower = name.to_lowercase();
+    if lower.ends_with(".md") {
+        "md"
+    } else if lower.ends_with(".mindmap") {
+        "mindmap"
+    } else {
+        "other"
+    }
+}
+
+fn entry_sort_key(e: &VaultEntry) -> (u8, String) {
+    // dirs first, then files; case-insensitive name compare
+    (if e.kind == "dir" { 0 } else { 1 }, e.name.to_lowercase())
+}
+
+fn walk_vault(root: &Path, dir: &Path) -> Result<Vec<VaultEntry>, String> {
+    let mut out: Vec<VaultEntry> = Vec::new();
+    let read = match fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(e) => return Err(e.to_string()),
+    };
+    for entry in read {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip OS junk
+        if name == "Thumbs.db" || name == ".DS_Store" {
+            continue;
+        }
+
+        if path.is_dir() {
+            let children = walk_vault(root, &path)?;
+            out.push(VaultEntry {
+                path: rel_path(root, &path).unwrap_or_else(|| name.clone()),
+                name,
+                kind: "dir".to_string(),
+                children: Some(children),
+                modified: None,
+            });
+        } else if path.is_file() {
+            let kind = classify_file(&name);
+            let modified = path
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+            out.push(VaultEntry {
+                path: rel_path(root, &path).unwrap_or_else(|| name.clone()),
+                name,
+                kind: kind.to_string(),
+                children: None,
+                modified,
+            });
+        }
+    }
+    out.sort_by(|a, b| entry_sort_key(a).cmp(&entry_sort_key(b)));
+    Ok(out)
+}
+
+/// Resolve a vault-relative path back to an absolute path under `vault`,
+/// rejecting `..` traversal.
+fn resolve_under_vault(vault: &Path, rel: &str) -> Result<PathBuf, String> {
+    let rel = rel.trim_start_matches('/');
+    let mut p = vault.to_path_buf();
+    for seg in rel.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            return Err("Invalid path (traversal)".into());
+        }
+        p.push(seg);
+    }
+    Ok(p)
+}
+
+// ─── Commands: vault pointer ───────────────────────────────────────────────
+
+#[tauri::command]
+fn get_vault_path(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let ptr = vault_pointer_path(&app)?;
+    if !ptr.exists() {
+        return Ok(None);
+    }
+    let s = fs::read_to_string(&ptr).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+    Ok(v.get("path").and_then(|p| p.as_str()).map(|s| s.to_string()))
+}
+
+#[tauri::command]
+fn set_vault_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    // Make sure the chosen directory exists and is a dir
+    let p = PathBuf::from(&path);
+    if !p.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+    // Create .mindmapper subfolder eagerly so settings have somewhere to live
+    let cfg_dir = p.join(".mindmapper");
+    fs::create_dir_all(&cfg_dir).map_err(|e| e.to_string())?;
+
+    let ptr = vault_pointer_path(&app)?;
+    let body = serde_json::json!({ "path": path });
+    fs::write(&ptr, body.to_string()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ─── Commands: vault file tree ─────────────────────────────────────────────
+
+#[tauri::command]
+fn list_vault_tree(vault: String) -> Result<Vec<VaultEntry>, String> {
+    let root = PathBuf::from(&vault);
+    if !root.is_dir() {
+        return Err(format!("Vault is not a directory: {}", vault));
+    }
+    walk_vault(&root, &root)
+}
+
+#[tauri::command]
+fn read_vault_file(vault: String, rel: String) -> Result<String, String> {
+    let path = resolve_under_vault(&PathBuf::from(&vault), &rel)?;
+    if !path.is_file() {
+        return Err(format!("Not a file: {}", rel));
+    }
+    fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn write_vault_file(vault: String, rel: String, content: String) -> Result<(), String> {
+    let path = resolve_under_vault(&PathBuf::from(&vault), &rel)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_vault_file(vault: String, rel: String) -> Result<(), String> {
+    let path = resolve_under_vault(&PathBuf::from(&vault), &rel)?;
+    if path.is_dir() {
+        fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+    } else if path.exists() {
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_vault_file(vault: String, from: String, to: String) -> Result<(), String> {
+    let vault_p = PathBuf::from(&vault);
+    let src = resolve_under_vault(&vault_p, &from)?;
+    let dst = resolve_under_vault(&vault_p, &to)?;
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&src, &dst).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn create_vault_folder(vault: String, rel: String) -> Result<(), String> {
+    let path = resolve_under_vault(&PathBuf::from(&vault), &rel)?;
+    fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ─── Commands: OpenRouter calls ────────────────────────────────────────────
+
+async fn call_openrouter(
+    api_key: String,
+    model: String,
+    prompt: String,
+) -> Result<(String, OpenRouterUsage), String> {
+    let client = reqwest::Client::new();
+    let res = client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .header("HTTP-Referer", "https://github.com/reflaxess123/mapper")
+        .header("X-Title", "MindMapper")
+        .json(&OpenRouterRequest {
+            model,
+            messages: vec![OpenRouterMessage {
+                role: "user".to_string(),
+                content: prompt,
+            }],
+        })
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    let status = res.status();
+    let body = res.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    if !status.is_success() {
+        return Err(friendly_openrouter_error(status, &body));
+    }
+
+    let response_data: OpenRouterResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse API response JSON: {}. Response: {}", e, body))?;
+
+    if let Some(err) = response_data.error {
+        let msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("");
+        let code = err
+            .get("code")
+            .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+            .unwrap_or_default();
+        if !msg.is_empty() {
+            return Err(if code.is_empty() {
+                format!("OpenRouter: {}", msg)
+            } else {
+                format!("OpenRouter ({}): {}", code, msg)
+            });
+        }
+        return Err(format!("OpenRouter returned error: {}", err));
+    }
+
+    let choices = response_data.choices.ok_or("No choices returned from OpenRouter API")?;
+    if choices.is_empty() {
+        return Err("Empty choices returned from OpenRouter API".to_string());
+    }
+    let content = choices[0]
+        .message
+        .content
+        .as_ref()
+        .ok_or("No message content returned from OpenRouter API")?
+        .clone();
+    let usage = response_data.usage.unwrap_or(OpenRouterUsage {
+        prompt_tokens: Some(0),
+        completion_tokens: Some(0),
+        total_tokens: Some(0),
+    });
+    Ok((content, usage))
 }
 
 #[tauri::command]
@@ -140,79 +420,24 @@ async fn generate_mindmap(api_key: String, topic: String, model: String) -> Resu
          Provide 3 to 5 main branches, and each main branch should have 2 to 4 sub-branches. Keep the names concise (1-5 words). Ensure the JSON is completely valid.",
         topic
     );
-
-    let client = reqwest::Client::new();
-    let res = client.post("https://openrouter.ai/api/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .header("HTTP-Referer", "https://github.com/antigravity/mapper")
-        .header("X-Title", "MindMapper")
-        .json(&OpenRouterRequest {
-            model,
-            messages: vec![OpenRouterMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        })
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
-
-    let status = res.status();
-    let body = res.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
-
-    if !status.is_success() {
-        return Err(friendly_openrouter_error(status, &body));
-    }
-
-    let response_data: OpenRouterResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse API response JSON: {}. Response: {}", e, body))?;
-
-    if let Some(err) = response_data.error {
-        // Same shape as the non-2xx branch but we got here with status 200
-        // (e.g. OpenRouter returns 200 + error JSON for some upstream
-        // model failures).
-        let msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("");
-        let code = err
-            .get("code")
-            .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
-            .unwrap_or_default();
-        if !msg.is_empty() {
-            return Err(if code.is_empty() {
-                format!("OpenRouter: {}", msg)
-            } else {
-                format!("OpenRouter ({}): {}", code, msg)
-            });
-        }
-        return Err(format!("OpenRouter returned error: {}", err));
-    }
-
-    let choices = response_data.choices.ok_or("No choices returned from OpenRouter API")?;
-    if choices.is_empty() {
-        return Err("Empty choices returned from OpenRouter API".to_string());
-    }
-
-    let content = choices[0].message.content.as_ref().ok_or("No message content returned from OpenRouter API")?;
-    
-    let clean_json = parse_json_from_llm(content)?;
-    let usage = response_data.usage.unwrap_or(OpenRouterUsage {
-        prompt_tokens: Some(0),
-        completion_tokens: Some(0),
-        total_tokens: Some(0),
-    });
-
+    let (content, usage) = call_openrouter(api_key, model, prompt).await?;
+    let clean_json = parse_json_from_llm(&content)?;
     let resp = GenerationResponse {
         data: clean_json,
         prompt_tokens: usage.prompt_tokens.unwrap_or(0),
         completion_tokens: usage.completion_tokens.unwrap_or(0),
         total_tokens: usage.total_tokens.unwrap_or(0),
     };
-
     serde_json::to_string(&resp).map_err(|e| format!("Failed to serialize result: {}", e))
 }
 
 #[tauri::command]
-async fn extend_node(api_key: String, topic_context: String, node_label: String, model: String) -> Result<String, String> {
+async fn extend_node(
+    api_key: String,
+    topic_context: String,
+    node_label: String,
+    model: String,
+) -> Result<String, String> {
     let prompt = format!(
         "We are building a mind map about the overarching theme: \"{}\".\n\
          We want to expand the specific node named: \"{}\".\n\
@@ -236,162 +461,65 @@ async fn extend_node(api_key: String, topic_context: String, node_label: String,
          Ensure the generated IDs are unique strings and the response is a valid JSON array.",
         topic_context, node_label
     );
-
-    let client = reqwest::Client::new();
-    let res = client.post("https://openrouter.ai/api/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .header("HTTP-Referer", "https://github.com/antigravity/mapper")
-        .header("X-Title", "MindMapper")
-        .json(&OpenRouterRequest {
-            model,
-            messages: vec![OpenRouterMessage {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        })
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
-
-    let status = res.status();
-    let body = res.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
-
-    if !status.is_success() {
-        return Err(friendly_openrouter_error(status, &body));
-    }
-
-    let response_data: OpenRouterResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse API response JSON: {}. Response: {}", e, body))?;
-
-    if let Some(err) = response_data.error {
-        // Same shape as the non-2xx branch but we got here with status 200
-        // (e.g. OpenRouter returns 200 + error JSON for some upstream
-        // model failures).
-        let msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("");
-        let code = err
-            .get("code")
-            .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
-            .unwrap_or_default();
-        if !msg.is_empty() {
-            return Err(if code.is_empty() {
-                format!("OpenRouter: {}", msg)
-            } else {
-                format!("OpenRouter ({}): {}", code, msg)
-            });
-        }
-        return Err(format!("OpenRouter returned error: {}", err));
-    }
-
-    let choices = response_data.choices.ok_or("No choices returned from OpenRouter API")?;
-    if choices.is_empty() {
-        return Err("Empty choices returned from OpenRouter API".to_string());
-    }
-
-    let content = choices[0].message.content.as_ref().ok_or("No message content returned from OpenRouter API")?;
-    
-    let clean_json = parse_json_from_llm(content)?;
-    let usage = response_data.usage.unwrap_or(OpenRouterUsage {
-        prompt_tokens: Some(0),
-        completion_tokens: Some(0),
-        total_tokens: Some(0),
-    });
-
+    let (content, usage) = call_openrouter(api_key, model, prompt).await?;
+    let clean_json = parse_json_from_llm(&content)?;
     let resp = GenerationResponse {
         data: clean_json,
         prompt_tokens: usage.prompt_tokens.unwrap_or(0),
         completion_tokens: usage.completion_tokens.unwrap_or(0),
         total_tokens: usage.total_tokens.unwrap_or(0),
     };
-
     serde_json::to_string(&resp).map_err(|e| format!("Failed to serialize result: {}", e))
 }
 
 #[tauri::command]
-fn save_mindmap(app_handle: tauri::AppHandle, id: String, data: String) -> Result<(), String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
-    
-    let file_path = app_dir.join(format!("{}.json", id));
-    fs::write(&file_path, data).map_err(|e| e.to_string())?;
-    Ok(())
+async fn generate_note(api_key: String, topic: String, model: String) -> Result<String, String> {
+    let prompt = format!(
+        "Write a detailed, well-structured study note on the topic: \"{}\".\n\
+         Output ONLY raw GitHub-Flavored Markdown — no surrounding code fences, no preamble.\n\
+         Use:\n\
+         - `# Title` as the first line (use the topic as the title).\n\
+         - `##` / `###` headings to organize sections.\n\
+         - Bullet lists for enumerable points; numbered lists for sequences.\n\
+         - Bold for key terms.\n\
+         - Inline `$...$` and display `$$...$$` LaTeX for any math.\n\
+         - Fenced code blocks where code is helpful.\n\
+         Aim for 400–800 words. Be specific and avoid fluff.",
+        topic
+    );
+    let (content, usage) = call_openrouter(api_key, model, prompt).await?;
+    let md = strip_markdown_fences(&content);
+    let resp = GenerationResponse {
+        data: md,
+        prompt_tokens: usage.prompt_tokens.unwrap_or(0),
+        completion_tokens: usage.completion_tokens.unwrap_or(0),
+        total_tokens: usage.total_tokens.unwrap_or(0),
+    };
+    serde_json::to_string(&resp).map_err(|e| format!("Failed to serialize result: {}", e))
 }
 
-#[tauri::command]
-fn load_mindmap(app_handle: tauri::AppHandle, id: String) -> Result<String, String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    let file_path = app_dir.join(format!("{}.json", id));
-    
-    if !file_path.exists() {
-        return Err("Mind map not found".to_string());
-    }
-    
-    fs::read_to_string(&file_path).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn delete_mindmap(app_handle: tauri::AppHandle, id: String) -> Result<(), String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    let file_path = app_dir.join(format!("{}.json", id));
-    
-    if file_path.exists() {
-        fs::remove_file(file_path).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn list_mindmaps(app_handle: tauri::AppHandle) -> Result<Vec<MindMapMeta>, String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    if !app_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut list = Vec::new();
-    let entries = fs::read_dir(app_dir).map_err(|e| e.to_string())?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path.is_file() && path.extension().map_or(false, |ext| ext == "json") {
-            let id = path.file_stem().unwrap().to_string_lossy().into_owned();
-            let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
-            let modified = metadata.modified()
-                .unwrap_or(SystemTime::now())
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-
-            // Try to extract name from JSON content
-            let mut name = id.clone();
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(parsed) = serde_json::from_str::<ShortMindMap>(&content) {
-                    if let Some(n) = parsed.name {
-                        name = n;
-                    }
-                }
-            }
-
-            list.push(MindMapMeta { id, name, modified });
-        }
-    }
-
-    // Sort by modified time descending (newest first)
-    list.sort_by(|a, b| b.modified.cmp(&a.modified));
-    Ok(list)
-}
+// ─── Entry point ───────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            // OpenRouter
             generate_mindmap,
             extend_node,
-            save_mindmap,
-            load_mindmap,
-            delete_mindmap,
-            list_mindmaps
+            generate_note,
+            // Vault pointer
+            get_vault_path,
+            set_vault_path,
+            // Vault file ops
+            list_vault_tree,
+            read_vault_file,
+            write_vault_file,
+            delete_vault_file,
+            rename_vault_file,
+            create_vault_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
