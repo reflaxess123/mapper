@@ -721,54 +721,42 @@ html, body {
   flex-shrink: 0;
 }
 
-/* Width slider — sits between title and the buttons */
-.note-width-knob {
+/* Discrete width levels — replaces the old range slider. Each dot
+   carries its level number; the active one fills with accent. */
+.width-levels {
   display: inline-flex;
   align-items: center;
-  padding: 0 8px;
+  gap: 3px;
+  padding: 3px;
   background: var(--surface);
   border-radius: var(--radius-sm);
   height: 32px;
 }
-.note-width-knob input[type="range"] {
-  -webkit-appearance: none;
+.width-level {
   appearance: none;
-  width: 92px;
+  width: 24px; height: 24px;
+  border: none;
   background: transparent;
+  color: var(--muted);
+  border-radius: 50%;
   cursor: pointer;
-  outline: none;
-  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 11px / 1 inherit;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.2px;
+  transition: background 0.12s var(--ease-out), color 0.12s var(--ease-out), transform 0.12s var(--ease-out);
 }
-.note-width-knob input[type="range"]::-webkit-slider-runnable-track {
-  height: 3px;
-  border-radius: 99px;
-  background: var(--border-strong);
-}
-.note-width-knob input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 14px; height: 14px;
-  border-radius: 50%;
+.width-level:hover { background: var(--hover); color: var(--fg); }
+.width-level.active {
   background: var(--accent);
-  margin-top: -5.5px;
-  border: none;
-  cursor: grab;
-  transition: transform 0.15s var(--ease-out);
+  color: var(--accent-fg);
 }
-.note-width-knob input[type="range"]:hover::-webkit-slider-thumb {
-  transform: scale(1.1);
-}
-.note-width-knob input[type="range"]::-moz-range-track {
-  height: 3px;
-  border-radius: 99px;
-  background: var(--border-strong);
-}
-.note-width-knob input[type="range"]::-moz-range-thumb {
-  width: 14px; height: 14px;
-  border-radius: 50%;
+.width-level.active:hover {
   background: var(--accent);
-  border: none;
-  cursor: grab;
+  color: var(--accent-fg);
+  filter: brightness(1.05);
 }
 
 .note-icon-btn,

@@ -25,8 +25,10 @@ interface NoteEditorProps {
   fileTokens?: TokenStats | null;
 }
 
-const MIN_W = 560;
-const MAX_W = 1200;
+// Discrete width steps. The active one lights up; clicking another
+// snaps the column to that level. Width is still stored as a px number
+// in settings so future steps can be inserted without a migration.
+const WIDTH_LEVELS: number[] = [600, 760, 900, 1100];
 
 export const NoteEditor: React.FC<NoteEditorProps> = ({
   title,
@@ -77,16 +79,20 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({
             <h1 className="note-title" title={title}>{title}</h1>
           </div>
           <div className="note-header-actions">
-            <div className="note-width-knob" title="Adjust note width">
-              <input
-                type="range"
-                min={MIN_W}
-                max={MAX_W}
-                step={20}
-                value={width}
-                onChange={(e) => onWidthChange(Number(e.target.value))}
-                aria-label="Note width"
-              />
+            <div className="width-levels" role="group" aria-label="Note width">
+              {WIDTH_LEVELS.map((w, i) => (
+                <button
+                  key={w}
+                  type="button"
+                  className={`width-level${width === w ? " active" : ""}`}
+                  onClick={() => onWidthChange(w)}
+                  title={`${w}px wide`}
+                  aria-pressed={width === w}
+                  aria-label={`Width level ${i + 1}`}
+                >
+                  {i + 1}
+                </button>
+              ))}
             </div>
             <button
               type="button"
